@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-06-08T09:49:31.772Z"
+status: in_progress
+last_updated: "2026-06-08T17:26:42.386Z"
 progress:
   total_phases: 5
-  completed_phases: 0
-  total_plans: 5
-  completed_plans: 0
-  percent: 0
+  completed_phases: 1
+  total_plans: 17
+  completed_plans: 5
+  percent: 20
 ---
 
 # State: TorchInspector
@@ -21,7 +21,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-08)
 
 **Core value:** Make the internal state of PyTorch training loops observable through a clean, minimal API.
-**Current focus:** Phase 1 — Core Observer (TensorBoard Wrapper)
+**Current focus:** Phase 2 — Layer Observer (Activation Monitoring)
 
 ## Current Status
 
@@ -31,8 +31,8 @@ See: .planning/PROJECT.md (updated 2026-06-08)
 | Research | Complete |
 | Requirements | Defined (21 v1) |
 | Roadmap | Created (5 phases) |
-| Phase 1 | Pending — run `/gsd:discuss-phase 1` |
-| Phase 2 | Pending |
+| Phase 1 | Complete — 46 tests passing, ruff+mypy clean |
+| Phase 2 | Context gathered — run `/gsd:plan-phase 2` |
 | Phase 3 | Pending |
 | Phase 4 | Pending |
 | Phase 5 | Pending |
@@ -41,7 +41,7 @@ See: .planning/PROJECT.md (updated 2026-06-08)
 
 | Phase | Status | Plans | Progress |
 |-------|--------|-------|----------|
-| 1: Core Observer | ○ | 0/5 | 0% |
+| 1: Core Observer | ● | 5/5 | 100% |
 | 2: Layer Observer | ○ | 0/3 | 0% |
 | 3: Feature Map Viewer | ○ | 0/3 | 0% |
 | 4: Explainability Plugin | ○ | 0/3 | 0% |
@@ -49,7 +49,7 @@ See: .planning/PROJECT.md (updated 2026-06-08)
 
 ## Current Wave
 
-None active. Run `/gsd:discuss-phase 1` to begin.
+Phase 2 context gathered. Ready for planning — run `/gsd:plan-phase 2`.
 
 ## Decisions Log
 
