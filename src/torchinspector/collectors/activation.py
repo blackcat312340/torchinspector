@@ -96,7 +96,7 @@ class ActivationCollector:
             cur_mean = flat.mean().item()
             ema_m = self._ema_mean.get(name, cur_mean)
             self._ema_mean[name] = self._ema_decay * ema_m + (1 - self._ema_decay) * cur_mean
-            if ema_m > 1e-8:
+            if abs(ema_m) > 1e-8:
                 drift = abs(cur_mean / ema_m - 1.0)
                 self._backend.write_scalar(
                     f"activations/{name}/drift", drift, step
