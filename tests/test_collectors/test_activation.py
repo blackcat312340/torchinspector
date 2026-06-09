@@ -184,8 +184,8 @@ class TestActivationCollector:
         hook_manager._activations["fc1"] = torch.randn(2, 3)
 
         collector.collect(step=20)  # 2× interval
-        assert backend.write_scalar.call_count == 5
+        assert backend.write_scalar.call_count == 6
 
         backend.reset_mock()
         collector.collect(step=30)  # 3× interval
-        assert backend.write_scalar.call_count == 5
+        assert backend.write_scalar.call_count == 6
