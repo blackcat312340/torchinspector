@@ -65,7 +65,7 @@ class TestActivationCollector:
 
         # Step 10: at interval
         collector.collect(step=10)
-        assert backend.write_scalar.call_count == 5  # 5 stats for fc1
+        assert backend.write_scalar.call_count == 6  # 5 stats + drift for fc1
 
     def test_statistics_correctness(
         self,
