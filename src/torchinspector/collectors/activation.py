@@ -43,6 +43,10 @@ class ActivationCollector:
         self._backend = backend
         self._log_interval = log_interval
         self._dead_neuron_threshold = dead_neuron_threshold
+        # EMA baseline for drift detection
+        self._ema_mean: dict[str, float] = {}
+        self._ema_std: dict[str, float] = {}
+        self._ema_decay: float = 0.99
 
     def collect(self, step: int) -> None:
         """Collect and write activation statistics if at log interval.
@@ -87,6 +91,16 @@ class ActivationCollector:
 
             # Dropout verification
             self._collect_dropout_stats(name, t, total, step)
+
+            # Activation drift: |current_mean / ema_mean - 1|
+            cur_mean = flat.mean().item()
+            ema_m = self._ema_mean.get(name, cur_mean)
+            self._ema_mean[name] = self._ema_decay * ema_m + (1 - self._ema_decay) * cur_mean
+            if ema_m > 1e-8:
+                drift = abs(cur_mean / ema_m - 1.0)
+                self._backend.write_scalar(
+                    f"activations/{name}/drift", drift, step
+                )
 
     # -- Private helpers ----------------------------------------------------
 

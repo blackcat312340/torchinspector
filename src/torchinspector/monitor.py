@@ -193,6 +193,10 @@ class TrendMonitor:
             if trend is None and loss > 0:
                 trend = "—"
             lines.append(f"  Loss: {loss:.4f} {trend or '—'}")
+            # NaN/Inf detection
+            import math
+            if math.isnan(loss) or math.isinf(loss):
+                lines.append("  CRITICAL NaN/Inf loss detected!")
 
         # Active alerts
         active = [(n, alvl) for n, alvl in self._current_alerts.items() if alvl >= AlertLevel.WARN]

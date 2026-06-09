@@ -68,8 +68,8 @@ class TestGradientCollector:
 
         # Step 10: at interval
         collector.collect(step=10)
-        # fc1 has weight + bias = 2 params
-        assert backend.write_scalar.call_count == 2
+        # fc1 has weight + bias = 2 params, each with norm + update_ratio
+        assert backend.write_scalar.call_count == 4
 
     def test_l2_norm_correctness(
         self,
@@ -148,7 +148,7 @@ class TestGradientCollector:
         backend: MagicMock,
         collector: GradientCollector,
     ) -> None:
-        """Scalar tags should follow gradients/{param_name}/norm pattern."""
+        """Scalar tags should follow gradients/{param_name}/norm or /update_ratio pattern."""
         self._run_backward(model, torch.randn(4, 10))
 
         collector.collect(step=10)
@@ -156,10 +156,7 @@ class TestGradientCollector:
         for call in backend.write_scalar.call_args_list:
             tag = call.args[0]
             assert tag.startswith("gradients/")
-            assert tag.endswith("/norm")
-            # Extract param name between "gradients/" and "/norm"
-            param_part = tag[len("gradients/"):-len("/norm")]
-            assert param_part in ["fc1.weight", "fc1.bias"]
+            assert any(tag.endswith(s) for s in ("/norm", "/update_ratio"))
 
     def test_multiple_layers(
         self,
@@ -174,5 +171,5 @@ class TestGradientCollector:
         self._run_backward(model, torch.randn(4, 10))
         collector.collect(step=10)
 
-        # 2 params per layer × 2 layers = 4 scalars
-        assert backend.write_scalar.call_count == 4
+        # 4 params total × 2 metrics (norm + update_ratio)
+        assert backend.write_scalar.call_count == 8

@@ -7,6 +7,13 @@ from torch import nn
 from torchinspector.backends.tensorboard import TensorBoardBackend
 
 
+def _is_invalid(arr: object) -> bool:
+    """Check if array contains NaN or Inf values."""
+    import numpy as np
+    a = np.asarray(arr)
+    return bool(np.isnan(a).any() or np.isinf(a).any())
+
+
 class ParamCollector:
     """Collects parameter weight and gradient histograms at intervals.
 
@@ -49,10 +56,14 @@ class ParamCollector:
 
         for name, param in self._model.named_parameters():
             if weights and param is not None:
-                self._backend.write_histogram(
-                    f"params/{name}", param.detach().cpu().numpy(), step
-                )
+                vals = param.detach().cpu().numpy()
+                if not _is_invalid(vals):
+                    self._backend.write_histogram(
+                        f"params/{name}", vals, step
+                    )
             if gradients and param.grad is not None:
-                self._backend.write_histogram(
-                    f"grads/{name}", param.grad.detach().cpu().numpy(), step
+                vals = param.grad.detach().cpu().numpy()
+                if not _is_invalid(vals):
+                    self._backend.write_histogram(
+                        f"grads/{name}", vals, step
                 )

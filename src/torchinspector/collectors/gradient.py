@@ -62,8 +62,18 @@ class GradientCollector:
                 continue
             if param.grad is None:
                 continue
+            grad = param.grad.detach().float()
+            if grad.isnan().any() or grad.isinf().any():
+                continue
 
-            norm = param.grad.detach().float().norm(p=2).item()
+            norm = grad.norm(p=2).item()
             self._backend.write_scalar(
                 f"gradients/{name}/norm", norm, step
             )
+            # Weight update ratio: ||grad|| / (||weight|| + eps)
+            w_norm = param.detach().float().norm(p=2).item()
+            if w_norm > 1e-8:
+                ratio = norm / w_norm
+                self._backend.write_scalar(
+                    f"gradients/{name}/update_ratio", ratio, step
+                )
