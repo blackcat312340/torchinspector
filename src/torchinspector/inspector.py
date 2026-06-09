@@ -166,6 +166,7 @@ class Inspector:
         self._weight_collector = WeightCollector(
             model,
             self._backend,
+            self._hook_manager,
             weight_heatmap_interval=weight_heatmap_interval,
         )
         self._normalization_collector = NormalizationCollector(

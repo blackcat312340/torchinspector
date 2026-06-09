@@ -7,20 +7,23 @@ import torch
 from torch import nn
 
 from torchinspector.backends.tensorboard import TensorBoardBackend
+from torchinspector.hooks import HookManager
 
 
 class WeightCollector:
     """Renders Linear and Conv weight matrices as heatmap images.
 
+    Only renders for layers that are watched (via HookManager).
     Linear weights ``(out, in)`` and Conv weights ``(C_out, C_in, kH, kW)``
-    are normalized and rendered via matplotlib viridis (grayscale fallback).
-    Images appear in TensorBoard under ``"weights/{layer}/matrix"``.
+    are normalized and rendered via matplotlib viridis. Near-constant
+    and tiny matrices are skipped.
     """
 
     def __init__(
         self,
         model: nn.Module,
         backend: TensorBoardBackend,
+        hook_manager: HookManager | None = None,
         *,
         weight_heatmap_interval: int = 2000,
     ) -> None:
@@ -29,11 +32,12 @@ class WeightCollector:
         Args:
             model: The PyTorch model.
             backend: TensorBoard backend for image writing.
-            weight_heatmap_interval: Steps between weight heatmap renders
-                (default 2000 — can be expensive for large matrices).
+            hook_manager: If set, only render heatmaps for watched layers.
+            weight_heatmap_interval: Steps between weight heatmap renders.
         """
         self._model = model
         self._backend = backend
+        self._hook_manager = hook_manager
         self._weight_heatmap_interval = weight_heatmap_interval
 
     def collect(self, step: int) -> None:
@@ -41,8 +45,17 @@ class WeightCollector:
         if step % self._weight_heatmap_interval != 0:
             return
 
+        watched = (
+            set(self._hook_manager._handles.keys())
+            if self._hook_manager is not None
+            else None
+        )
+
         for name, module in self._model.named_modules():
             if name == "":
+                continue
+            # Only render watched layers (if filter active)
+            if watched is not None and name not in watched:
                 continue
             if isinstance(module, nn.Linear):
                 weight = module.weight.data.detach().cpu()
@@ -53,8 +66,10 @@ class WeightCollector:
                     )
             elif isinstance(module, nn.Conv2d):
                 weight = module.weight.data.detach().cpu()
-                # (C_out, C_in, kH, kW) → reshape to (C_out, C_in*kH*kW)
                 c_out, c_in, k_h, k_w = weight.shape
+                # Skip 1x1 conv (pointwise) and tiny filters
+                if c_out < 4 and c_in < 4:
+                    continue
                 weight_2d = weight.view(c_out, c_in * k_h * k_w)
                 heatmap = self._render_matrix(weight_2d)
                 if heatmap is not None:
@@ -76,6 +91,12 @@ class WeightCollector:
             return None
 
         arr = weight.float().numpy()
+        # Skip near-constant matrices (e.g., zero-initialized bias)
+        if arr.max() - arr.min() < 1e-6:
+            return None
+        # Skip tiny matrices (< 8px — invisible even after upscale)
+        if arr.shape[0] < 8 or arr.shape[1] < 8:
+            return None
         # For large matrices, limit to max 512 in either dimension via slicing
         if arr.shape[0] > 512:
             arr = arr[:512, :]
