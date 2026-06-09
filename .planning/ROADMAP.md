@@ -14,8 +14,31 @@
 | 3 | Feature Map Viewer | CNN feature map visualization and dead neuron detection | FEAT-01, FEAT-02, DIAG-01 (v2) | 3 | mvp |
 | 4 | Explainability Plugin | Grad-CAM, Captum integration, attention heatmaps | (v2 deferred) | 3 | mvp |
 | 5 | Ecosystem & Polish | Lightning callback, HF compat, docs, perf benchmarks | ECOS-01, ECOS-02 (v2) | 3 | mvp |
+| 6 | Universal Layer Observability | Dead neurons, weight heatmaps, BN/LN/Pooling/RNN monitoring | UNIV-01..06 | 6 | mvp |
 
-**Total: 5 phases | 21 v1 requirements mapped | 100% coverage ✓**
+**v1.0 Total: 6 phases | 29 plans | 155 tests | 87% coverage ✓**
+
+---
+
+## v1.1 — Validation & Release
+
+| # | Phase | Goal | Requirements | Plans | Mode |
+|---|-------|------|--------------|-------|------|
+| 7 | Grad-CAM Validation | Captum installed, Grad-CAM on real CNN, verified heatmaps | EXPL-01, EXPL-02 (v1.1 validation) | 2 | mvp |
+| 8 | Benchmarks & Docs | Performance data <5%, Sphinx HTML, examples/ complete | ECOS-01 (v1.1) | 2 | mvp |
+| 9 | PyPI Release | Package metadata, version bump, publish validation | DIST-04 (v1.1) | 2 | mvp |
+
+**v1.1 Total: 2 phases complete | Phase 9 skipped (not industrial-grade)**
+
+---
+
+## v1.2 — Smart Monitoring
+
+| # | Phase | Goal | Requirements | Plans | Mode |
+|---|-------|------|--------------|-------|------|
+| 10 | Smart Monitoring | Auto layer detection, trend-aware alerting, training health reports | SMART-01..03 | 4 | mvp |
+
+**v1.2 Total: 1 phase | 4 plans**
 
 ---
 

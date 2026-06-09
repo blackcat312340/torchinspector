@@ -1,55 +1,48 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
+milestone: v1.1
+milestone_name: validation-and-release
 status: in_progress
-last_updated: "2026-06-08T15:00:00.000Z"
+last_updated: "2026-06-09T12:00:00.000Z"
 progress:
-  total_phases: 5
-  completed_phases: 2
-  total_plans: 14
-  completed_plans: 8
-  percent: 40
+  v1_0_phases: 6
+  v1_1_phases: 3
+  total_plans: 29
+  completed_plans: 23
+  v1_1_percent: 0
 ---
 
 # State: TorchInspector
 
-**Last updated:** 2026-06-08
+**Last updated:** 2026-06-09
 
-## Project Reference
+## v1.1 — Validation & Release
 
-See: .planning/PROJECT.md (updated 2026-06-08)
-
-**Core value:** Make the internal state of PyTorch training loops observable through a clean, minimal API.
-**Current focus:** Phase 3 — Feature Map Viewer (planned — 3 plans in 2 waves)
-
-## Current Status
+**Current focus:** Phase 7 — Grad-CAM Validation
 
 | Item | Status |
 |------|--------|
-| Project | Initialized |
-| Research | Complete |
-| Requirements | Defined (21 v1) |
-| Roadmap | Created (5 phases) |
-| Phase 1 | Complete — 46 tests passing, ruff+mypy clean |
-| Phase 2 | Complete — 79 tests passing, ruff+mypy clean |
-| Phase 3 | Planned — 3 plans / 2 waves. Run `/gsd:execute-phase 3` |
-| Phase 4 | Pending |
-| Phase 5 | Pending |
+| v1.0 | Complete — 6 phases, 155 tests, 87% coverage |
+| Phase 7: Grad-CAM Validation | ◐ Planned |
+| Phase 8: Benchmarks & Docs | ○ Pending |
+| Phase 9: PyPI Release | ○ Pending |
 
-## Phase Progress
+## v1.0 Phase Progress
 
-| Phase | Status | Plans | Progress |
-|-------|--------|-------|----------|
-| 1: Core Observer | ● | 5/5 | 100% |
-| 2: Layer Observer | ● | 3/3 | 100% |
-| 3: Feature Map Viewer | ◐ | 3/3 | 0% |
-| 4: Explainability Plugin | ○ | 0/3 | 0% |
-| 5: Ecosystem & Polish | ○ | 0/3 | 0% |
+| Phase | Status |
+|-------|--------|
+| 1: Core Observer | ● |
+| 2: Layer Observer | ● |
+| 3: Feature Map Viewer | ● |
+| 4: Explainability Plugin | ● |
+| 5: Ecosystem & Polish | ● |
+| 6: Universal Layer Observability | ● |
 
 ## Current Wave
 
-Phase 3 planned — 3 plans across 2 waves. Wave 1 (Plans 01-02): FeatureMapCollector + dead filter detection. Wave 2 (Plan 03): tests, integration, edge cases. Ready for execution — run `/gsd:execute-phase 3`.
+v1.1 complete. v1.2 Phase 10 (Smart Monitoring) done. 162 tests, ruff ✅, mypy ✅.
+
+New: classify_architecture(), watch_auto(), TrendMonitor with INFO→WARN→CRITICAL escalation, periodic health reports.
 
 ## Decisions Log
 

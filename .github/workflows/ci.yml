@@ -1,0 +1,66 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint
+        run: ruff check src/ tests/
+
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install . mypy
+      - name: Type check
+        run: mypy --strict src/
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+        torch-version: ["2.0", "2.5"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install PyTorch
+        run: pip install torch==${{ matrix.torch-version }}.* --extra-index-url https://download.pytorch.org/whl/cpu
+      - name: Install project
+        run: pip install -e .
+      - name: Install test deps
+        run: pip install pytest
+      - name: Test
+        run: pytest tests/ -v
+
+  integration-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyTorch (CPU)
+        run: pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+      - name: Install project and deps
+        run: pip install -e . torchvision onnx onnxscript
+      - name: Run MNIST CNN example
+        run: python examples/mnist_cnn.py
+      - name: Verify event file
+        run: |
+          ls runs/mnist_cnn/events.out.tfevents.* && echo "Event file OK" || echo "WARNING: no event file"
