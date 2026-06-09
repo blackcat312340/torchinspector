@@ -1,0 +1,77 @@
+=== Scalars ===
+  activations/0/drift: 0.0000 → 0.8753  (37 pts)
+  activations/0/max: 1.4996 → 2.0117  (37 pts)
+  activations/0/mean: 0.0386 → 0.1041  (37 pts)
+  activations/0/min: -1.1264 → -1.4398  (37 pts)
+  activations/0/sparsity: 0.0000 → 0.0000  (37 pts)
+  activations/0/std: 0.2324 → 0.3274  (37 pts)
+  activations/1/drift: 0.0000 → 0.4078  (37 pts)
+  activations/1/max: 1.4996 → 2.0117  (37 pts)
+  activations/1/mean: 0.0840 → 0.1370  (37 pts)
+  activations/1/min: 0.0000 → 0.0000  (37 pts)
+  activations/1/sparsity: 0.3800 → 0.5632  (37 pts)
+  activations/1/std: 0.1768 → 0.2909  (37 pts)
+  activations/2/dead_neuron_ratio: 0.3260 → 0.4914  (37 pts)
+  activations/2/drift: 0.0000 → 0.4689  (37 pts)
+  activations/2/max: 1.4996 → 2.0117  (37 pts)
+  activations/2/mean: 0.1151 → 0.1990  (37 pts)
+  activations/2/min: 0.0000 → 0.0000  (37 pts)
+  activations/2/sparsity: 0.3260 → 0.4914  (37 pts)
+  activations/2/std: 0.2184 → 0.3622  (37 pts)
+  activations/3/dead_neuron_ratio: 0.1496 → 0.7754  (37 pts)
+  activations/3/drift: 0.0000 → 2.8610  (37 pts)
+  activations/3/max: 3.2200 → 6.2265  (37 pts)
+  activations/3/mean: 0.3071 → -0.3505  (37 pts)
+  activations/3/min: -0.8960 → -9.2861  (37 pts)
+  activations/3/sparsity: 0.0000 → 0.0000  (37 pts)
+  activations/3/std: 0.4951 → 1.0897  (37 pts)
+  activations/4/drift: 0.0000 → 0.4270  (37 pts)
+  activations/4/max: 3.2200 → 6.2265  (37 pts)
+  activations/4/mean: 0.3233 → 0.1691  (37 pts)
+  activations/4/min: 0.0000 → 0.0000  (37 pts)
+  activations/4/sparsity: 0.1496 → 0.7754  (37 pts)
+  activations/4/std: 0.4795 → 0.5240  (37 pts)
+  activations/5/dead_neuron_ratio: 0.0279 → 0.6030  (37 pts)
+  activations/5/drift: 0.0000 → 0.2052  (37 pts)
+  activations/5/max: 3.2200 → 6.2265  (37 pts)
+  activations/5/mean: 0.4775 → 0.3725  (37 pts)
+  activations/5/min: 0.0000 → 0.0000  (37 pts)
+  activations/5/sparsity: 0.0279 → 0.6030  (37 pts)
+  activations/5/std: 0.5760 → 0.7794  (37 pts)
+  features/0/dead_filter_count: 0.0000 → 0.0000  (9 pts)
+  features/3/dead_filter_count: 0.0000 → 0.0000  (9 pts)
+  gradients/0.bias/norm: 0.2555 → 0.2692  (37 pts)
+  gradients/0.bias/update_ratio: 0.8654 → 1.1435  (37 pts)
+  gradients/0.weight/norm: 0.2500 → 0.2386  (37 pts)
+  gradients/0.weight/update_ratio: 0.1116 → 0.0737  (37 pts)
+  gradients/3.bias/norm: 0.1158 → 0.0529  (37 pts)
+  gradients/3.bias/update_ratio: 0.3830 → 0.1187  (37 pts)
+  gradients/3.weight/norm: 0.2337 → 0.2929  (37 pts)
+  gradients/3.weight/update_ratio: 0.0580 → 0.0370  (37 pts)
+  pool/2/mean: 0.1339 → 0.1998  (18 pts)
+  pool/2/std: 0.2496 → 0.3682  (18 pts)
+  pool/5/mean: 0.5635 → 0.4044  (18 pts)
+  pool/5/std: 0.7160 → 0.7938  (18 pts)
+  system/batch_time_seconds: 0.0269 → 0.0151  (1875 pts)
+  train/loss: 2.3124 → 0.0340  (1876 pts)
+  train/lr: 0.0010 → 0.0010  (1876 pts)
+
+=== Images ===
+  features/0/channels: 4 images, 224x28
+  features/3/channels: 4 images, 112x14
+  weights/0/matrix: 4 images, 32x32
+  weights/3/matrix: 4 images, 144x32
+
+=== Histograms ===
+  grads/0.bias
+  grads/0.weight
+  grads/3.bias
+  grads/3.weight
+  grads/7.bias
+  grads/7.weight
+  params/0.bias
+  params/0.weight
+  params/3.bias
+  params/3.weight
+  params/7.bias
+  params/7.weight
