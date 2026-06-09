@@ -19,7 +19,6 @@ from torchinspector.collectors.residual import ResidualCollector
 from torchinspector.collectors.rnn import RNNCollector
 from torchinspector.collectors.scalar import ScalarCollector
 from torchinspector.collectors.weight import WeightCollector
-from torchinspector.dashboard import _build_dashboard_html
 from torchinspector.export import ONNXExporter
 from torchinspector.hooks import HookManager
 from torchinspector.monitor import TrendMonitor
@@ -265,20 +264,6 @@ class Inspector:
             layer_name: The name of the layer to unwatch.
         """
         self._hook_manager.unwatch(layer_name)
-
-    def dashboard(self) -> str:
-        """Generate an interactive HTML dashboard in the log directory.
-
-        Creates ``dashboard.html`` containing a clickable model structure
-        tree linked to TensorBoard. Returns the file path.
-
-        Returns:
-            Path to the generated HTML file.
-        """
-        dashboard_path = self._log_dir / "dashboard.html"
-        html = _build_dashboard_html(self._model, self._log_dir)
-        dashboard_path.write_text(html, encoding="utf-8")
-        return str(dashboard_path)
 
     def watch_auto(self, max_layers: int = 8) -> list[str]:
         """Automatically select the most informative layers to watch.
