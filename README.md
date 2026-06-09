@@ -1,6 +1,6 @@
 # TorchInspector
 
-[![CI](https://github.com/USER/torchinspector/actions/workflows/ci.yml/badge.svg)](https://github.com/USER/torchinspector/actions/workflows/ci.yml)
+[![CI](https://github.com/blackcat312340/torchinspector/actions/workflows/ci.yml/badge.svg)](https://github.com/blackcat312340/torchinspector/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![PyPI](https://img.shields.io/badge/pypi-torchinspector-blue)](https://pypi.org/project/torchinspector/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
