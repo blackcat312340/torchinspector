@@ -22,24 +22,6 @@ dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.8"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.poetry]
-name = "torchinspector"
-version = "0.1.0"
-description = "PyTorch training observation library — see inside your models"
-readme = "README.md"
-license = "MIT"
-packages = [{include = "torchinspector", from = "src"}]
-
-[tool.poetry.dependencies]
-python = "^3.10"
-torch = ">=2.0"
-numpy = ">=1.24"
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.0"
-ruff = "^0.4"
-mypy = "^1.8"
-
 [tool.ruff]
 target-version = "py310"
 line-length = 100
