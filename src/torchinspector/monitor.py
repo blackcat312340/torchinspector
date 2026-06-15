@@ -8,7 +8,7 @@ INFO → WARN → CRITICAL levels based on trend + threshold.
 from __future__ import annotations
 
 import enum
-import math  # noqa: F401 — used by check_convergence()
+import math
 import sys
 from collections import defaultdict
 
@@ -182,6 +182,39 @@ class TrendMonitor:
 
         return alerts
 
+    def check_convergence(self, loss: float, step: int) -> AlertLevel:
+        """Check loss for convergence trajectory and divergence signals.
+
+        Feeds three sub-windows (short/medium/long) and checks for
+        divergence via consecutive-rise counting with slope confirmation.
+
+        Args:
+            loss: Current loss value.
+            step: Current training step.
+
+        Returns:
+            Current ``AlertLevel`` for convergence health.
+        """
+        # NaN/Inf guard — never poison windows
+        if not math.isfinite(loss):
+            self._nan_steps.append(step)
+            self._current_alerts["convergence"] = AlertLevel.CRITICAL
+            return AlertLevel.CRITICAL
+
+        # Feed three sub-windows
+        for suffix, size in [
+            (":short", _SHORT_WINDOW),
+            (":medium", _MEDIUM_WINDOW),
+            (":long", _LONG_WINDOW),
+        ]:
+            key = f"train/loss{suffix}"
+            win = self._windows[key]
+            win.append(loss)
+            if len(win) > size:
+                win.pop(0)
+
+        return self._check_divergence()
+
     def report(
         self, step: int, loss: float | None = None
     ) -> str:
@@ -203,7 +236,6 @@ class TrendMonitor:
                 trend = "—"
             lines.append(f"  Loss: {loss:.4f} {trend or '—'}")
             # NaN/Inf detection
-            import math
             if math.isnan(loss) or math.isinf(loss):
                 lines.append("  CRITICAL NaN/Inf loss detected!")
 
@@ -280,3 +312,39 @@ class TrendMonitor:
             return "↓"
         else:
             return "→"
+
+    def _check_divergence(self) -> AlertLevel:
+        """Check for divergence via consecutive rises in short window.
+
+        Returns CRITICAL after 2 consecutive confirmations of
+        10+ rises with positive slope. Returns WARN on first
+        confirmation. Returns OK otherwise.
+        """
+        short_key = "train/loss:short"
+        short_win = self._windows.get(short_key, [])
+
+        if len(short_win) < _SHORT_WINDOW:
+            return AlertLevel.OK
+
+        # Count consecutive rises from end of window
+        consecutive_rises = 0
+        for i in range(len(short_win) - 1, 0, -1):
+            if short_win[i] > short_win[i - 1]:
+                consecutive_rises += 1
+            else:
+                break
+
+        slope = self._compute_slope(short_win)
+
+        if consecutive_rises >= 10 and slope is not None and slope > 0:
+            self._divergence_consecutive += 1
+            if self._divergence_consecutive >= 2:
+                self._current_alerts["convergence"] = AlertLevel.CRITICAL
+                return AlertLevel.CRITICAL
+            else:
+                self._current_alerts["convergence"] = AlertLevel.WARN
+                return AlertLevel.WARN
+        else:
+            self._divergence_consecutive = 0
+            self._current_alerts.pop("convergence", None)
+            return AlertLevel.OK
