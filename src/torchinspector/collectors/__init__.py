@@ -12,6 +12,7 @@ from torchinspector.collectors.residual import ResidualCollector
 from torchinspector.collectors.rnn import RNNCollector
 from torchinspector.collectors.scalar import ScalarCollector
 from torchinspector.collectors.weight import WeightCollector
+from torchinspector.collectors.weight_grad_ratio import WeightGradRatioCollector
 
 __all__ = [
     "ActivationCollector",
@@ -24,4 +25,5 @@ __all__ = [
     "RNNCollector",
     "ScalarCollector",
     "WeightCollector",
+    "WeightGradRatioCollector",
 ]
