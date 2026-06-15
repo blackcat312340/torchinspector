@@ -235,6 +235,93 @@ class TrendMonitor:
 
         return alerts
 
+    def check_wgr(self, name: str, log_ratio: float, step: int) -> AlertLevel:
+        """Check weight-to-gradient log-ratio for vanishing/exploding trends.
+
+        Feeds three sub-windows (short/medium/long) and detects whether
+        the log-space ratio is consistently rising (vanishing signal) or
+        consistently falling (exploding signal) across multiple time scales.
+
+        Args:
+            name: Layer or parameter name (e.g., ``"fc1"``).
+            log_ratio: Log-space weight-to-gradient ratio.
+            step: Current training step.
+
+        Returns:
+            Current ``AlertLevel`` for this WGR metric.
+        """
+        # Feed three sub-windows
+        for suffix, size in [
+            (":short", _SHORT_WINDOW),
+            (":medium", _MEDIUM_WINDOW),
+            (":long", _LONG_WINDOW),
+        ]:
+            key = f"ratios/{name}/mean{suffix}"
+            win = self._windows[key]
+            win.append(log_ratio)
+            if len(win) > size:
+                win.pop(0)
+
+        # Compute slopes for short and long windows
+        short_key = f"ratios/{name}/mean:short"
+        long_key = f"ratios/{name}/mean:long"
+        short_slope = self._compute_slope(self._windows.get(short_key, []))
+        long_slope = self._compute_slope(self._windows.get(long_key, []))
+
+        alert_key = f"wgr/{name}"
+
+        # Trend detection logic
+        if short_slope is not None and long_slope is not None:
+            if short_slope > 0 and long_slope > 0:
+                # Both positive → vanishing trend (weight dominating gradient)
+                self._alert_counts[alert_key] += 1
+            elif short_slope < 0 and long_slope < 0:
+                # Both negative → exploding trend (gradient dominating weight)
+                self._alert_counts[alert_key] += 1
+            elif (short_slope > 0 and long_slope < 0) or (short_slope < 0 and long_slope > 0):
+                # Mixed signal → decay count by 1
+                self._alert_counts[alert_key] = max(0, self._alert_counts[alert_key] - 1)
+            else:
+                # Both zero or one zero — no clear signal
+                pass
+        elif short_slope is not None:
+            # Only short slope available — check direction
+            if short_slope > 0 or short_slope < 0:
+                self._alert_counts[alert_key] += 1
+
+        count = self._alert_counts[alert_key]
+
+        # Escalation thresholds
+        if count >= 20 and short_slope is not None and long_slope is not None:
+            # Check for acceleration: short slope magnitude > 1.5x long slope magnitude
+            if abs(short_slope) > abs(long_slope) * 1.5:
+                level = AlertLevel.CRITICAL
+            elif count >= 10:
+                level = AlertLevel.WARN
+            elif count >= 5:
+                level = AlertLevel.INFO
+            else:
+                level = AlertLevel.OK
+        elif count >= 10:
+            level = AlertLevel.WARN
+        elif count >= 5:
+            level = AlertLevel.INFO
+        else:
+            level = AlertLevel.OK
+
+        # Reset on improvement: if neither vanishing nor exploding pattern
+        # is sustained, reset the alert count
+        if short_slope is not None and long_slope is not None:
+            both_positive = short_slope > 0 and long_slope > 0
+            both_negative = short_slope < 0 and long_slope < 0
+            if not both_positive and not both_negative and count < 5:
+                # No sustained trend — reset
+                self._alert_counts[alert_key] = 0
+                level = AlertLevel.OK
+
+        self._current_alerts[alert_key] = level
+        return level
+
     def check_convergence(self, loss: float, step: int) -> AlertLevel:
         """Check loss for convergence trajectory and divergence signals.
 
