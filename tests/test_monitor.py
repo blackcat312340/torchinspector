@@ -1090,7 +1090,7 @@ class TestNewCorrelationRules:
         assert slow_alerts[0][1] == AlertLevel.WARN
 
     def test_convergence_slow_wgr_abnormal_warn(self) -> None:
-        """Slow convergence + extreme W/G ratio triggers WARN."""
+        """Slow convergence + extreme W/G log-ratio triggers CRITICAL."""
         mon = TrendMonitor(window_size=30)
         # Feed increasing loss to get low convergence score
         for i in range(250):
@@ -1098,17 +1098,17 @@ class TestNewCorrelationRules:
         # Force low convergence score
         mon.convergence_score(current_loss=13.0)
 
-        # Feed extreme ratio data
-        ratio_data = [5000.0, 6000.0, 7000.0]
-        for v in ratio_data:
-            mon.check("weight_grad_ratio", value=v, threshold=9999.0)
+        # Feed extreme log-ratio data via check_wgr (> 6.0 threshold)
+        ratio_data = [7.0, 8.0, 9.0]
+        for i, v in enumerate(ratio_data):
+            mon.check_wgr("fc1", log_ratio=v, step=i)
 
-        metrics = {"weight_grad_ratio": ratio_data[-1]}
+        metrics = {"ratios/fc1/mean": ratio_data[-1]}
         alerts = mon.correlation_check(metrics)
 
         wgr_alerts = [a for a in alerts if a[0] == "convergence_slow_wgr_abnormal"]
         assert len(wgr_alerts) == 1
-        assert wgr_alerts[0][1] == AlertLevel.WARN
+        assert wgr_alerts[0][1] == AlertLevel.CRITICAL
 
     def test_no_correlation_alert_when_converging_well(self) -> None:
         """Good convergence + normal metrics = no new convergence alerts."""
@@ -1149,3 +1149,230 @@ class TestNewCorrelationRules:
         ]
         triggered = [a for a in alerts if a[0] in convergence_rules]
         assert len(triggered) == 0
+
+
+# -- WGR check_wgr() tests (Phase 12 Plan 02) ---------------------------------
+
+
+class TestCheckWgr:
+    """Tests for TrendMonitor.check_wgr() — multi-scale WGR trend detection."""
+
+    def test_check_wgr_feeds_subwindows(self) -> None:
+        """check_wgr creates ratios/{name}/mean:short, :medium, :long keys."""
+        mon = TrendMonitor()
+        mon.check_wgr("fc1", log_ratio=1.0, step=1)
+        assert "ratios/fc1/mean:short" in mon._windows
+        assert "ratios/fc1/mean:medium" in mon._windows
+        assert "ratios/fc1/mean:long" in mon._windows
+
+    def test_check_wgr_short_window_truncation(self) -> None:
+        """Short window holds at most 10 values."""
+        mon = TrendMonitor()
+        for i in range(20):
+            mon.check_wgr("fc1", log_ratio=float(i), step=i)
+        assert len(mon._windows["ratios/fc1/mean:short"]) == 10
+
+    def test_check_wgr_vanishing_trend_increments_count(self) -> None:
+        """Consistently rising log_ratio increments alert count."""
+        mon = TrendMonitor()
+        for i in range(15):
+            mon.check_wgr("fc1", log_ratio=float(i), step=i)
+        assert mon._alert_counts["wgr/fc1"] > 0
+
+    def test_check_wgr_exploding_trend_increments_count(self) -> None:
+        """Consistently falling log_ratio increments alert count."""
+        mon = TrendMonitor()
+        for i in range(15):
+            mon.check_wgr("fc1", log_ratio=float(20 - i), step=i)
+        assert mon._alert_counts["wgr/fc1"] > 0
+
+    def test_check_wgr_mixed_signal_decays_count(self) -> None:
+        """Mixed signal (short and long slopes disagree) decays the alert count."""
+        mon = TrendMonitor()
+        # Build up count with consistently rising values
+        for i in range(15):
+            mon.check_wgr("fc1", log_ratio=float(i), step=i)
+        count_before = mon._alert_counts["wgr/fc1"]
+        assert count_before > 0
+        # Create mixed signal: long window still has rising data, but recent
+        # (short window) data is falling. This makes long_slope > 0, short_slope < 0.
+        for i in range(15):
+            mon.check_wgr("fc1", log_ratio=10.0 - float(i), step=15 + i)
+        count_after = mon._alert_counts["wgr/fc1"]
+        # Count should have decayed due to mixed signal
+        assert count_after < count_before
+
+    def test_check_wgr_info_after_5(self) -> None:
+        """5 consecutive trend steps trigger INFO level."""
+        mon = TrendMonitor()
+        for i in range(8):
+            level = mon.check_wgr("fc1", log_ratio=float(i), step=i)
+        assert level == AlertLevel.INFO
+
+    def test_check_wgr_warn_after_10(self) -> None:
+        """10 consecutive trend steps trigger WARN level."""
+        mon = TrendMonitor()
+        for i in range(15):
+            level = mon.check_wgr("fc1", log_ratio=float(i), step=i)
+        assert level == AlertLevel.WARN
+
+    def test_check_wgr_critical_after_20_with_acceleration(self) -> None:
+        """20 steps + accelerating slope triggers CRITICAL."""
+        mon = TrendMonitor()
+        # Need accelerating trend: short slope > 1.5x long slope
+        # Feed slow rise for long window, then fast rise for short window
+        for i in range(200):
+            mon.check_wgr("fc1", log_ratio=float(i) * 0.1, step=i)
+        # Now fast rise in short window
+        for i in range(10):
+            level = mon.check_wgr("fc1", log_ratio=20.0 + float(i) * 5.0, step=200 + i)
+        assert level == AlertLevel.CRITICAL
+
+    def test_check_wgr_resets_on_improvement(self) -> None:
+        """Trend reversal resets count to 0 when no sustained pattern."""
+        mon = TrendMonitor()
+        # Build up count with rising values (5 steps → INFO level)
+        for i in range(6):
+            mon.check_wgr("fc1", log_ratio=float(i), step=i)
+        assert mon._alert_counts["wgr/fc1"] > 0
+        # Feed flat/stable values that break the trend — both slopes ~0
+        for i in range(20):
+            mon.check_wgr("fc1", log_ratio=5.0, step=6 + i)
+        # With flat data, slopes are ~0 (neither positive nor negative),
+        # count should have decayed and reset
+        assert mon._alert_counts["wgr/fc1"] == 0
+
+    def test_check_wgr_returns_alert_level(self) -> None:
+        """check_wgr returns correct AlertLevel at each stage."""
+        mon = TrendMonitor()
+        # First few calls: OK (not enough data)
+        level = mon.check_wgr("fc1", log_ratio=1.0, step=0)
+        assert level == AlertLevel.OK
+        # Build up to INFO
+        for i in range(1, 8):
+            level = mon.check_wgr("fc1", log_ratio=float(i), step=i)
+        assert level == AlertLevel.INFO
+
+
+# -- WGR correlation rules (Phase 12 Plan 02) ----------------------------------
+
+
+class TestWgrCorrelationRules:
+    """Tests for WGR-specific correlation rules."""
+
+    def test_convergence_slow_wgr_abnormal_critical(self) -> None:
+        """Low convergence score + extreme log_ratio triggers CRITICAL."""
+        mon = TrendMonitor(window_size=30)
+        # Feed increasing loss to get low convergence score
+        for i in range(250):
+            mon.check_convergence(0.5 + i * 0.05, step=i)
+        # Force low convergence score
+        mon.convergence_score(current_loss=13.0)
+
+        # Feed extreme log_ratio data (> 6.0 threshold)
+        ratio_data = [7.0, 8.0, 9.0]
+        for v in ratio_data:
+            mon.check_wgr("fc1", log_ratio=v, step=0)
+
+        metrics = {"ratios/fc1/mean": ratio_data[-1]}
+        alerts = mon.correlation_check(metrics)
+
+        wgr_alerts = [a for a in alerts if a[0] == "convergence_slow_wgr_abnormal"]
+        assert len(wgr_alerts) == 1
+        assert wgr_alerts[0][1] == AlertLevel.CRITICAL
+
+    def test_wgr_vanishing_gradient_declining_warn(self) -> None:
+        """Rising WGR slope + falling gradient slope triggers WARN."""
+        mon = TrendMonitor(window_size=30)
+        # Feed rising WGR data (vanishing trend)
+        for i in range(10):
+            mon.check_wgr("fc1", log_ratio=float(i), step=i)
+
+        # Feed declining gradient data
+        grad_data = [1.0 - i * 0.05 for i in range(10)]
+        for v in grad_data:
+            mon.check("gradient_norm", value=v, threshold=9999.0)
+
+        metrics = {
+            "ratios/fc1/mean": float(9),
+            "gradient_norm": grad_data[-1],
+        }
+        alerts = mon.correlation_check(metrics)
+
+        wgr_alerts = [a for a in alerts if a[0] == "wgr_vanishing_gradient_declining"]
+        assert len(wgr_alerts) == 1
+        assert wgr_alerts[0][1] == AlertLevel.WARN
+
+    def test_no_wgr_correlation_when_converging(self) -> None:
+        """High convergence score + normal ratios → no WGR alerts."""
+        mon = TrendMonitor(window_size=30)
+        # Feed decreasing loss to get high convergence score
+        for i in range(250):
+            mon.check_convergence(5.0 - i * 0.01, step=i)
+        # Set high convergence score
+        mon.convergence_score(current_loss=2.5)
+
+        # Feed normal WGR data
+        for i in range(10):
+            mon.check_wgr("fc1", log_ratio=1.0 + float(i) * 0.01, step=i)
+
+        metrics = {"ratios/fc1/mean": 1.09}
+        alerts = mon.correlation_check(metrics)
+
+        wgr_rules = [
+            "convergence_slow_wgr_abnormal",
+            "wgr_vanishing_gradient_declining",
+        ]
+        triggered = [a for a in alerts if a[0] in wgr_rules]
+        assert len(triggered) == 0
+
+    def test_wgr_correlation_uses_log_space_thresholds(self) -> None:
+        """Verify 6.0/-6.0 thresholds (not 1000/0.001) for WGR correlation."""
+        mon = TrendMonitor(window_size=30)
+        # Feed increasing loss to get low convergence score
+        for i in range(250):
+            mon.check_convergence(0.5 + i * 0.05, step=i)
+        mon.convergence_score(current_loss=13.0)
+
+        # log_ratio = 5.9 should NOT trigger (below 6.0 threshold)
+        mon.check_wgr("fc1", log_ratio=5.9, step=0)
+        metrics_1 = {"ratios/fc1/mean": 5.9}
+        alerts_1 = mon.correlation_check(metrics_1)
+        wgr_1 = [a for a in alerts_1 if a[0] == "convergence_slow_wgr_abnormal"]
+        assert len(wgr_1) == 0
+
+        # log_ratio = 6.1 should trigger (above 6.0 threshold)
+        mon.check_wgr("fc1", log_ratio=6.1, step=1)
+        metrics_2 = {"ratios/fc1/mean": 6.1}
+        alerts_2 = mon.correlation_check(metrics_2)
+        wgr_2 = [a for a in alerts_2 if a[0] == "convergence_slow_wgr_abnormal"]
+        assert len(wgr_2) == 1
+
+
+# -- WGR report tests (Phase 12 Plan 02) --------------------------------------
+
+
+class TestWgrReport:
+    """Tests for WGR summary in health reports."""
+
+    def test_report_contains_wgr_summary(self) -> None:
+        """After check_wgr calls, report shows WGR line."""
+        mon = TrendMonitor()
+        for i in range(5):
+            mon.check_wgr("fc1", log_ratio=float(i), step=i)
+        report = mon.report(step=10, loss=1.0)
+        assert "WGR:" in report
+
+    def test_report_wgr_summary_counts(self) -> None:
+        """WGR summary shows correct OK/WARN/CRITICAL counts."""
+        mon = TrendMonitor()
+        # fc1: build up to WARN (rising trend, 10+ steps)
+        for i in range(12):
+            mon.check_wgr("fc1", log_ratio=float(i), step=i)
+        # fc2: just a few steps (OK)
+        for i in range(3):
+            mon.check_wgr("fc2", log_ratio=1.0, step=i)
+        report = mon.report(step=20, loss=1.0)
+        assert "WGR:" in report
+        # Should show at least 1 OK (fc2) and some non-OK (fc1)
+        assert "OK" in report.split("WGR:")[1].split("\n")[0]
