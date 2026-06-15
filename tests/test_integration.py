@@ -484,3 +484,96 @@ class TestStressHighLR:
             )
         finally:
             shutil.rmtree(log_dir, ignore_errors=True)
+
+
+# ============================================================================
+# Phase 11 Plan 03: Convergence integration tests
+# ============================================================================
+
+
+def _get_scalar_tags(log_dir: Path) -> set[str]:
+    """Extract all scalar tag names from a TensorBoard event file directory."""
+    ea = EventAccumulator(str(log_dir))
+    ea.Reload()
+    return set(ea.Tags().get("scalars", []))
+
+
+def _get_scalar_values(log_dir: Path, tag: str) -> list[tuple[int, float]]:
+    """Extract (step, value) pairs for a scalar tag."""
+    ea = EventAccumulator(str(log_dir))
+    ea.Reload()
+    events = ea.Scalars(tag)
+    return [(e.step, e.value) for e in events]
+
+
+class TestInspectorConvergenceIntegration:
+    """Integration tests for convergence tracking in Inspector.step()."""
+
+    def test_step_calls_check_convergence(self) -> None:
+        """step() calls monitor.check_convergence() when loss provided."""
+        from torchinspector.monitor import TrendMonitor
+
+        model = nn.Linear(2, 2)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        log_dir = tempfile.mkdtemp()
+        try:
+            ins = Inspector(
+                model, optimizer, log_dir, health_report_interval=100,
+            )
+            with patch.object(
+                TrendMonitor, "check_convergence", return_value=AlertLevel.OK
+            ) as mock_check:
+                for i in range(1, 11):
+                    ins.step(loss=1.0 - i * 0.01)
+                assert mock_check.call_count == 10
+                # Verify last call args
+                last_call = mock_check.call_args_list[-1]
+                assert last_call[0][1] == 10  # step
+            ins.close()
+        finally:
+            shutil.rmtree(log_dir, ignore_errors=True)
+
+    def test_step_logs_convergence_scalars(self) -> None:
+        """At health_report_interval, 5 convergence TensorBoard tags are written."""
+        model = nn.Linear(2, 2)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        log_dir = tempfile.mkdtemp()
+        try:
+            ins = Inspector(
+                model, optimizer, log_dir, health_report_interval=10,
+            )
+            # Feed 30 steps of decreasing loss to build convergence data
+            for i in range(1, 31):
+                ins.step(loss=5.0 - i * 0.05)
+            ins.close()
+
+            scalar_tags = _get_scalar_tags(Path(log_dir))
+            assert "convergence/score" in scalar_tags, f"Missing convergence/score. Found: {scalar_tags}"
+            assert "convergence/slope:short" in scalar_tags, f"Missing slope:short. Found: {scalar_tags}"
+            assert "convergence/slope:medium" in scalar_tags, f"Missing slope:medium. Found: {scalar_tags}"
+            assert "convergence/slope:long" in scalar_tags, f"Missing slope:long. Found: {scalar_tags}"
+        finally:
+            shutil.rmtree(log_dir, ignore_errors=True)
+
+    def test_step_skips_est_steps_when_none(self) -> None:
+        """When estimated_steps is None, no convergence/est_steps tag written."""
+        model = nn.Linear(2, 2)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        log_dir = tempfile.mkdtemp()
+        try:
+            ins = Inspector(
+                model, optimizer, log_dir, health_report_interval=10,
+            )
+            # Feed increasing loss — diverging, so est_steps will be None
+            for i in range(1, 31):
+                ins.step(loss=0.5 + i * 0.1)
+            ins.close()
+
+            scalar_tags = _get_scalar_tags(Path(log_dir))
+            # convergence/score should exist, but est_steps should not
+            assert "convergence/score" in scalar_tags
+            assert "convergence/est_steps" not in scalar_tags, (
+                "est_steps should not be logged when diverging"
+            )
+        finally:
+            shutil.rmtree(log_dir, ignore_errors=True)

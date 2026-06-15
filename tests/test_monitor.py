@@ -986,3 +986,166 @@ class TestConvergenceTrend:
         for i in range(10):
             mon.check_convergence(3.0 + i * 0.1, step=200 + i)
         assert mon.convergence_trend() == "right-arrow"
+
+
+# -- Convergence section in report ---------------------------------------------
+
+
+class TestConvergenceReport:
+    """Tests for convergence section in health reports."""
+
+    def test_report_contains_convergence_score(self) -> None:
+        """After feeding loss data, report contains 'Convergence: score='."""
+        mon = TrendMonitor()
+        for i in range(30):
+            mon.check_convergence(2.0 - i * 0.01, step=i)
+        report = mon.report(step=30, loss=1.7)
+        assert "Convergence: score=" in report
+
+    def test_report_contains_estimated_steps(self) -> None:
+        """When converging, report contains 'Est. convergence:'."""
+        mon = TrendMonitor()
+        for i in range(250):
+            mon.check_convergence(5.0 - i * 0.02, step=i)
+        report = mon.report(step=250, loss=0.5)
+        assert "Est. convergence:" in report
+
+    def test_report_contains_nan_steps(self) -> None:
+        """After NaN loss, report contains 'NaN loss at steps:'."""
+        mon = TrendMonitor()
+        mon.check_convergence(float("nan"), step=10)
+        report = mon.report(step=20, loss=1.0)
+        assert "NaN loss at steps:" in report
+        assert "10" in report
+
+    def test_report_low_score_warning(self) -> None:
+        """Score < 30 produces WARNING line in report."""
+        mon = TrendMonitor()
+        # Feed noisy divergent loss to get low score (< 30)
+        rng = np.random.default_rng(42)
+        for i in range(250):
+            noisy = 0.5 + i * 0.1 + rng.normal(0, 2.0)
+            mon.check_convergence(noisy, step=i)
+        current = 0.5 + 249 * 0.1
+        report = mon.report(step=250, loss=current)
+        assert "WARNING" in report
+        assert "Low convergence score" in report
+
+
+# -- New correlation rules (Phase 11 Plan 03) ----------------------------------
+
+
+class TestNewCorrelationRules:
+    """Tests for the 3 convergence-aware correlation rules."""
+
+    def _build_monitor_with_data(
+        self,
+        metric_data: dict[str, list[float]],
+    ) -> TrendMonitor:
+        """Helper to populate a TrendMonitor with pre-existing data."""
+        mon = TrendMonitor(window_size=30)
+        for name, values in metric_data.items():
+            for v in values:
+                mon.check(name, value=v, threshold=9999.0)
+        return mon
+
+    def test_loss_stagnant_lr_decreasing_warn(self) -> None:
+        """Flat loss + decreasing LR triggers WARN loss_stagnant_lr_decreasing."""
+        # Flat loss — all within 0.001 slope
+        loss_data = [1.0 + (0.0001 * i) for i in range(10)]
+        # Decreasing LR
+        lr_data = [0.1 - i * 0.005 for i in range(10)]
+
+        mon = self._build_monitor_with_data({
+            "train/loss": loss_data,
+            "lr": lr_data,
+        })
+
+        metrics = {"train/loss": loss_data[-1], "lr": lr_data[-1]}
+        alerts = mon.correlation_check(metrics)
+
+        stagnant_alerts = [a for a in alerts if a[0] == "loss_stagnant_lr_decreasing"]
+        assert len(stagnant_alerts) == 1
+        assert stagnant_alerts[0][1] == AlertLevel.WARN
+
+    def test_convergence_slow_gradient_declining_warn(self) -> None:
+        """Slow convergence + falling gradient triggers WARN."""
+        mon = TrendMonitor(window_size=30)
+        # Feed increasing loss to get low convergence score
+        for i in range(250):
+            mon.check_convergence(0.5 + i * 0.05, step=i)
+        # Force low convergence score
+        mon.convergence_score(current_loss=13.0)
+
+        # Feed declining gradient data
+        grad_data = [1.0 - i * 0.05 for i in range(10)]
+        for v in grad_data:
+            mon.check("gradient_norm", value=v, threshold=9999.0)
+
+        metrics = {"gradient_norm": grad_data[-1]}
+        alerts = mon.correlation_check(metrics)
+
+        slow_alerts = [a for a in alerts if a[0] == "convergence_slow_gradient_declining"]
+        assert len(slow_alerts) == 1
+        assert slow_alerts[0][1] == AlertLevel.WARN
+
+    def test_convergence_slow_wgr_abnormal_warn(self) -> None:
+        """Slow convergence + extreme W/G ratio triggers WARN."""
+        mon = TrendMonitor(window_size=30)
+        # Feed increasing loss to get low convergence score
+        for i in range(250):
+            mon.check_convergence(0.5 + i * 0.05, step=i)
+        # Force low convergence score
+        mon.convergence_score(current_loss=13.0)
+
+        # Feed extreme ratio data
+        ratio_data = [5000.0, 6000.0, 7000.0]
+        for v in ratio_data:
+            mon.check("weight_grad_ratio", value=v, threshold=9999.0)
+
+        metrics = {"weight_grad_ratio": ratio_data[-1]}
+        alerts = mon.correlation_check(metrics)
+
+        wgr_alerts = [a for a in alerts if a[0] == "convergence_slow_wgr_abnormal"]
+        assert len(wgr_alerts) == 1
+        assert wgr_alerts[0][1] == AlertLevel.WARN
+
+    def test_no_correlation_alert_when_converging_well(self) -> None:
+        """Good convergence + normal metrics = no new convergence alerts."""
+        mon = TrendMonitor(window_size=30)
+        # Feed decreasing loss to get high convergence score
+        for i in range(250):
+            mon.check_convergence(5.0 - i * 0.01, step=i)
+        # Set high convergence score
+        mon.convergence_score(current_loss=2.5)
+
+        # Feed normal gradient data (stable)
+        grad_data = [1.0, 1.01, 0.99, 1.0, 1.02, 0.98, 1.01, 1.0, 0.99, 1.01]
+        for v in grad_data:
+            mon.check("gradient_norm", value=v, threshold=9999.0)
+
+        # Feed normal ratio data
+        ratio_data = [1.0, 1.1, 0.9, 1.0, 1.05]
+        for v in ratio_data:
+            mon.check("weight_grad_ratio", value=v, threshold=9999.0)
+
+        # Feed stable LR
+        lr_data = [0.01] * 10
+        for v in lr_data:
+            mon.check("lr", value=v, threshold=9999.0)
+
+        metrics = {
+            "gradient_norm": grad_data[-1],
+            "weight_grad_ratio": ratio_data[-1],
+            "lr": lr_data[-1],
+        }
+        alerts = mon.correlation_check(metrics)
+
+        # Should not trigger any convergence-related rules
+        convergence_rules = [
+            "loss_stagnant_lr_decreasing",
+            "convergence_slow_gradient_declining",
+            "convergence_slow_wgr_abnormal",
+        ]
+        triggered = [a for a in alerts if a[0] in convergence_rules]
+        assert len(triggered) == 0
