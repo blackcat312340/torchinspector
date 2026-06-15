@@ -43,7 +43,7 @@
 ### Phase 13: Learning Rate Scheduler Analysis
 
 **Requirements:** LR-01, LR-02, LR-03, INT-01 (partial), INT-02 (partial)
-**Status:** Pending
+**Status:** Planning
 
 - [ ] LR-01: Learning rate change curve (TensorBoard scalar)
 - [ ] LR-02: Anomalous scheduling detection (sudden jump >10x, decay too fast <0.01x) -> WARN alert
@@ -51,7 +51,14 @@
 - [ ] INT-01 (partial): TrendMonitor integration for LR alerts
 - [ ] INT-02 (partial): Cross-metric rule: lr-spike + loss-stagnation -> WARN
 
-**Modified files:** `src/torchinspector/collectors/scalar.py`, `src/torchinspector/inspector.py`
+**Plans:** 2 plans
+
+Plans:
+- [ ] 13-01-PLAN.md — LRCollector class with anomaly detection + TrendMonitor.check_lr()
+- [ ] 13-02-PLAN.md — Inspector wiring + lr_spike+loss_stagnant correlation rule
+
+**New files:** `src/torchinspector/collectors/lr_scheduler.py`
+**Modified files:** `src/torchinspector/monitor.py`, `src/torchinspector/inspector.py`, `src/torchinspector/collectors/__init__.py`
 
 ### Phase 14: Batch Size Sensitivity + Full Integration
 
