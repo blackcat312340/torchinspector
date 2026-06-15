@@ -1,311 +1,520 @@
-# Architecture Research
+# Architecture Research — v1.3 Universal Monitoring Enhancement
 
 **Domain:** PyTorch Training Observation Library
-**Researched:** 2026-06-08
+**Researched:** 2026-06-15
 **Confidence:** HIGH
+**Scope:** How 4 new metrics integrate into existing TorchInspector architecture
 
-## Standard Architecture
+## Executive Summary
 
-### System Overview
+All 4 new features (LR scheduler analysis, weight/gradient ratio, convergence trajectory, batch size sensitivity) fit cleanly into the existing Collector pattern. Two require new Collector classes, one extends an existing Collector, and one is a pure TrendMonitor enhancement. No architectural changes needed — the Facade + HookManager + Collector + Backend pipeline absorbs all 4 features with zero breaking changes.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     USER TRAINING CODE                       │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  model = MyModel()                                   │   │
-│  │  inspector = Inspector(model, optimizer, ...)        │   │
-│  │  inspector.watch(["conv1", "layer1.*"], interval=10) │   │
-│  │                                                      │   │
-│  │  for epoch in range(N):                              │   │
-│  │      for batch in loader:                            │   │
-│  │          loss = model(x)  # hooks fire automatically │   │
-│  │          loss.backward()                             │   │
-│  │          inspector.step()  # logs at interval         │   │
-│  └──────────────────────────────────────────────────────┘   │
-└──────────────────────┬──────────────────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────────────────┐
-│                    INSPECTOR (FACADE)                         │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Inspector.watch()  Inspector.step()                 │   │
-│  │  Inspector.log_*()  Inspector.export_onnx()         │   │
-│  └──────────┬──────────────────────────┬────────────────┘   │
-│             │                          │                     │
-│  ┌──────────▼──────────┐  ┌────────────▼────────────────┐   │
-│  │    HOOK MANAGER      │  │      LOG DISPATCHER         │   │
-│  │  - register hooks    │  │  - step counter             │   │
-│  │  - remove hooks      │  │  - interval gating          │   │
-│  │  - activation cache  │  │  - metric routing           │   │
-│  └──────────┬──────────┘  └────────────┬────────────────┘   │
-│             │                          │                     │
-│  ┌──────────▼──────────────────────────▼────────────────┐   │
-│  │                  COLLECTORS                            │   │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ │   │
-│  │  │ Scalar   │ │Param     │ │Activation│ │Gradient  │ │   │
-│  │  │Collector │ │Collector │ │Collector │ │Collector │ │   │
-│  │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ │   │
-│  └───────┴────────────┴────────────┴────────────┴───────┘   │
-│             │                          │                     │
-│  ┌──────────▼──────────────────────────▼────────────────┐   │
-│  │                  BACKEND (Protocol)                    │   │
-│  │  ┌────────────────────┐  ┌────────────────────────┐   │   │
-│  │  │ TensorBoardBackend │  │ (future: SQLite, JSONL)│   │   │
-│  │  │ SummaryWriter      │  │                        │   │   │
-│  │  └────────────────────┘  └────────────────────────┘   │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Component Responsibilities
-
-| Component | Responsibility | Typical Implementation |
-|-----------|----------------|------------------------|
-| **Inspector (Facade)** | Public API; owns lifecycle of all subsystems | Single class users instantiate and call |
-| **Hook Manager** | Register/remove forward hooks; cache captured activations | Thin wrapper around `module.register_forward_hook()` |
-| **Log Dispatcher** | Step counter; interval gating; route metrics to collectors | Simple integer counter + modulo check |
-| **Scalar Collector** | Gather scalar metrics (loss, acc, lr, time) → pass to backend | Dict of name→value, called at each `step()` |
-| **Param Collector** | Iterate `named_parameters()`, extract weights and grads → pass to backend | Called at interval; `param.detach().cpu()` |
-| **Activation Collector** | Compute statistics from cached activations → pass to backend | mean, std, min, max, sparsity computation |
-| **Gradient Collector** | Compute gradient norms per watched layer → pass to backend | `param.grad.norm().item()` for watched layer params |
-| **Backend (Protocol)** | Abstract interface for writing observation data | `Protocol` class with `write_scalar`, `write_histogram`, etc. |
-| **TensorBoardBackend** | Concrete backend: `SummaryWriter` calls | Implements Backend protocol |
-| **ONNX Exporter** | Export model to ONNX format | `torch.onnx.export()` wrapper |
-
-## Recommended Project Structure
+## Existing Architecture Recap
 
 ```
-torchinspector/
-├── src/
-│   └── torchinspector/
-│       ├── __init__.py          # Public API: exports Inspector class
-│       ├── py.typed             # PEP 561 marker
-│       ├── inspector.py         # Main Inspector facade class
-│       ├── hooks.py             # HookManager — register/remove forward hooks
-│       ├── collectors/
-│       │   ├── __init__.py
-│       │   ├── scalar.py        # ScalarCollector
-│       │   ├── parameter.py     # ParamCollector
-│       │   ├── activation.py    # ActivationCollector
-│       │   └── gradient.py      # GradientCollector
-│       ├── backends/
-│       │   ├── __init__.py
-│       │   ├── protocol.py      # Backend Protocol definition
-│       │   └── tensorboard.py   # TensorBoardBackend
-│       ├── export.py            # ONNX export utilities
-│       ├── utils.py             # Internal helpers (tensor stats, device handling)
-│       └── _version.py          # Version string
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py              # Shared fixtures (dummy model, dummy data)
-│   ├── test_inspector.py        # Integration tests for Inspector facade
-│   ├── test_hooks.py            # Unit tests for HookManager
-│   ├── test_collectors/
-│   │   ├── test_scalar.py
-│   │   ├── test_parameter.py
-│   │   ├── test_activation.py
-│   │   └── test_gradient.py
-│   ├── test_backends/
-│   │   └── test_tensorboard.py
-│   └── test_export.py
-├── examples/
-│   ├── mnist_cnn.py             # Full MNIST CNN example
-│   ├── cifar_resnet.py          # CIFAR-10 ResNet example
-│   └── transformer_demo.py      # Transformer monitoring example
-├── docs/
-│   ├── index.md
-│   ├── quickstart.md
-│   ├── api.md
-│   └── backends.md
-├── pyproject.toml
-├── README.md
-├── LICENSE
-└── .github/
-    └── workflows/
-        └── ci.yml
+Inspector (Facade)
+  ├── HookManager          — forward hook registration + activation cache
+  ├── ScalarCollector      — per-step scalars (loss, lr, gpu_mem, batch_time)
+  ├── ParamCollector       — interval-gated weight/gradient histograms
+  ├── ActivationCollector  — interval-gated activation stats from hook cache
+  ├── GradientCollector    — interval-gated grad norms per watched layer
+  ├── FeatureMapCollector  — interval-gated conv feature map images
+  ├── WeightCollector      — interval-gated weight heatmaps
+  ├── NormalizationCollector — BN drift, pooling stats
+  ├── RNNCollector         — hidden state stats
+  ├── ResidualCollector    — skip connection flow ratios
+  ├── ExplainCollector     — Grad-CAM / IG / attention
+  ├── TrendMonitor         — rolling window + linear regression + alerts
+  ├── TensorBoardBackend   — SummaryWriter adapter
+  └── ONNXExporter         — model export
 ```
 
-### Structure Rationale
+**Key patterns:**
+- Collectors receive `(model, hook_manager, backend, interval)` in constructor
+- `collect(step)` is the single entry point; early-returns if `step % interval != 0`
+- Inspector's `step()` calls every collector; interval gating is internal
+- TrendMonitor is a standalone component — no hooks, no backend dependency
+- HookManager only does forward hooks; no backward hooks currently
 
-- **`src/torchinspector/`:** src layout prevents accidental imports of unpackaged code; ensures tests run against installed version
-- **`collectors/`:** Each collector is a single-responsibility module; easy to add new metric types without touching existing code
-- **`backends/`:** Protocol-based separation; new backends are one file implementing the protocol
-- **`examples/`:** Runnable scripts that double as integration tests and user documentation
-- **`tests/`:** Mirrors src structure; pytest discovers by convention
+## Feature-by-Feature Integration Analysis
 
-## Architectural Patterns
+### METRIC-01: Learning Rate Scheduler Effect Analysis
 
-### Pattern 1: Facade + Strategy (Inspector + Backend)
+**What it does:** Records LR change curves per param group, detects anomalous scheduling (sudden drops, oscillations, stale LR), correlates LR changes with loss trajectory.
 
-**What:** The `Inspector` class is a Facade that owns all subsystems. It delegates actual data writing to a Backend Strategy (Protocol). Users interact only with the Inspector; backend switching is transparent.
+**Integration point: MODIFY existing `ScalarCollector`**
 
-**When to use:** Any time you have a single API surface that orchestrates multiple subsystems and needs swappable output targets.
+**Why not a new collector:** ScalarCollector already reads `optimizer.param_groups[i]["lr"]` every step and writes `train/lr` or `train/lr_group_{i}`. Adding scheduler analysis here is a natural extension — same data source, same step cadence, same backend writes.
 
-**Trade-offs:** Facade can become a god object if not disciplined. Mitigation: delegate to collectors; Inspector only coordinates.
+**What to add to ScalarCollector:**
+1. **LR delta tracking** — compute `lr_delta = current_lr - prev_lr` per group, write as `train/lr_delta_group_{i}`
+2. **LR change event detection** — when `|lr_delta| > epsilon`, write a marker scalar `train/lr_change_event` = 1.0 (useful for TensorBoard event lines overlay)
+3. **Scheduler type detection** — on first call, inspect `optimizer` for attached `lr_scheduler` via `_scheduler` attr or user-passed reference; log the scheduler class name as text metadata
+4. **Feed TrendMonitor** — after writing LR scalars, call `self._monitor.check("lr_group_{i}", lr, threshold=...)` to enable plateau/surge alerting on LR
 
-**Example:**
-```python
-from typing import Protocol, runtime_checkable
+**Constructor changes:**
+- Add optional `scheduler: torch.optim.lr_scheduler.LRScheduler | None = None` parameter
+- Store `_prev_lr: dict[int, float]` for delta computation
 
-@runtime_checkable
-class Backend(Protocol):
-    def write_scalar(self, tag: str, value: float, step: int) -> None: ...
-    def write_histogram(self, tag: str, values, step: int) -> None: ...
-    def write_graph(self, model, input) -> None: ...
-    def close(self) -> None: ...
-
-class Inspector:
-    def __init__(self, model, optimizer, *, backend=None):
-        self._backend = backend or TensorBoardBackend("runs/default")
-        self._hook_mgr = HookManager(model)
-        self._step = 0
-
-    def step(self, **metrics):
-        self._step += 1
-        if self._step % self.log_interval == 0:
-            for name, value in metrics.items():
-                self._backend.write_scalar(name, value, self._step)
+**Data flow:**
+```
+optimizer.param_groups → ScalarCollector.collect(step)
+  ├── write_scalar("train/lr", lr, step)           [existing]
+  ├── write_scalar("train/lr_delta", delta, step)   [NEW]
+  ├── write_scalar("train/lr_change_event", 1, step) [NEW, conditional]
+  └── monitor.check("lr", lr, threshold)            [NEW]
 ```
 
-### Pattern 2: Observer (Hook Manager → Forward Hooks)
+**TensorBoard output:**
+- `train/lr` — existing LR curve (already works)
+- `train/lr_delta` — step-to-step LR change magnitude
+- `train/lr_change_event` — binary marker for scheduler steps (overlay on loss curve)
 
-**What:** The HookManager registers PyTorch forward hooks on user-specified layers. Each hook is an Observer that fires on every forward pass, caching the output tensor for later statistics computation.
+**Files to modify:**
+- `src/torchinspector/collectors/scalar.py` — add LR delta tracking + event detection
+- `src/torchinspector/inspector.py` — pass scheduler reference to ScalarCollector (optional)
 
-**When to use:** Whenever you need to observe intermediate computation without modifying the observed code.
+**New files:**
+- `tests/test_collectors/test_lr_scheduler.py` — unit tests
 
-**Trade-offs:** Hooks add CPU overhead (tensor detach + copy). Mitigation: only watch specified layers; compute statistics at intervals, not every step.
-
-**Example:**
-```python
-class HookManager:
-    def __init__(self, model):
-        self.model = model
-        self.handles: dict[str, torch.utils.hooks.RemovableHandle] = {}
-        self.activations: dict[str, torch.Tensor] = {}
-
-    def watch(self, layers: list[str]):
-        for name, module in self.model.named_modules():
-            if name in layers:
-                handle = module.register_forward_hook(self._make_hook(name))
-                self.handles[name] = handle
-
-    def _make_hook(self, name: str):
-        def hook(module, inputs, output):
-            if isinstance(output, torch.Tensor):
-                self.activations[name] = output.detach().cpu()
-        return hook
-
-    def remove_all(self):
-        for handle in self.handles.values():
-            handle.remove()
-        self.handles.clear()
-```
-
-### Pattern 3: Template Method (Collectors)
-
-**What:** Each Collector follows the same template: gather data from a specific source → compute metrics → pass to backend. The template is: `collect() → compute() → dispatch()`. Individual collectors vary only the data source and computation.
-
-**When to use:** When you have multiple data sources that all follow the same collect→compute→dispatch flow.
-
-**Trade-offs:** If collectors diverge too much in their lifecycle, the template becomes constraining. Keep it loose (no strict base class, just convention).
-
-## Data Flow
-
-### Training Step Flow
-
-```
-[training loop: loss.backward(); optimizer.step()]
-    ↓
-[user calls inspector.step(loss=loss, acc=acc, lr=lr)]
-    ↓
-[Inspector.step()]
-    ├──→ [StepCounter: step += 1]
-    ├──→ [ScalarCollector: log loss, acc, lr, time, gpu_mem]
-    │       └──→ [Backend.write_scalar(tag, value, step)]
-    └──→ [if step % interval == 0:]
-            ├──→ [ParamCollector: iter named_parameters()]
-            │       └──→ [Backend.write_histogram("params/name", weights, step)]
-            │       └──→ [Backend.write_histogram("grads/name", grads, step)]
-            ├──→ [ActivationCollector: read from HookManager.activations]
-            │       └──→ compute mean, std, min, max, sparsity
-            │       └──→ [Backend.write_scalar / write_histogram]
-            └──→ [GradientCollector: grad_norm per watched layer]
-                    └──→ [Backend.write_scalar("grad_norm/name", norm, step)]
-```
-
-### Key Data Flows
-
-1. **Scalar flow:** User passes metrics dict → Inspector → ScalarCollector → Backend.write_scalar() → TensorBoard event file
-2. **Hook-Collection flow:** model(x) → forward hooks fire → HookManager caches tensors → Collector reads at interval → Backend writes
-3. **Graph flow:** user calls `inspector.log_graph(dummy_input)` → Backend.write_graph() → `SummaryWriter.add_graph()`
-4. **Export flow:** user calls `inspector.export_onnx("model.onnx")` → `torch.onnx.export()` → file written
-
-## Scaling Considerations
-
-| Scale | Architecture Adjustments |
-|-------|--------------------------|
-| Small models (<10M params, <50 layers) | Default settings fine; can watch 5-10 layers at every 10 steps |
-| Medium models (10M-100M params) | Reduce watch layers to 3-5; increase interval to 50-100 steps |
-| Large models (100M+ params, Transformers) | Sample parameters (not all params); progress bar for histogram writing; async I/O for logging |
-| Very large models (1B+ params) | Defer — this is a different product category (distributed, sharded logging) |
-
-### Scaling Priorities
-
-1. **First bottleneck:** Forward hook overhead on many layers — fix by limiting watch list, increasing interval
-2. **Second bottleneck:** Histogram writing for large parameter tensors — fix by sampling (random subset of values)
-3. **Third bottleneck:** TensorBoard event file I/O blocking training — fix by async writing (queue + background thread)
-
-## Anti-Patterns
-
-### Anti-Pattern 1: Hook on Every Layer
-
-**What people do:** `watch_layers="*"` — register hooks on all 200+ layers.
-**Why it's wrong:** Forward hooks fire on EVERY forward call; detach+copy on every layer kills training throughput.
-**Do this instead:** Require explicit layer selection. Suggest defaults: first conv, last layer before classifier, attention blocks.
-
-### Anti-Pattern 2: Logging Raw Tensors
-
-**What people do:** Save full activation tensors of shape (batch, channel, H, W) at every interval.
-**Why it's wrong:** A single ResNet-50 activation at layer3 is (32, 1024, 14, 14) = 6.4M floats. Logged 100 times = 640M floats = 2.5GB disk.
-**Do this instead:** Log statistics (mean, std, histograms). Save full tensors only on explicit request or for feature map previews (first few channels only).
-
-### Anti-Pattern 3: Synchronous I/O in Training Loop
-
-**What people do:** Write to TensorBoard directly in the training step without buffering.
-**Why it's wrong:** File I/O blocks the training thread; can add 10-50ms per logged step.
-**Do this instead:** Buffer writes; flush at interval boundaries. For extreme cases, use a background thread with a queue.
-
-### Anti-Pattern 4: Hard Dependency on Training Loop Structure
-
-**What people do:** Assume `for epoch in range(N): for batch in loader:` structure; auto-detect epoch boundaries.
-**Why it's wrong:** Users have custom loops, GAN training, RL loops, etc. Auto-detection breaks on non-standard structures.
-**Do this instead:** Let users control when `step()` is called. Don't try to auto-detect epoch boundaries. Provide optional `epoch()` marker.
-
-## Integration Points
-
-### External Services
-
-| Service | Integration Pattern | Notes |
-|---------|---------------------|-------|
-| TensorBoard | Direct library call (`SummaryWriter`) | Ships with PyTorch — no network dependency |
-| Netron | File-based (ONNX file → user opens in Netron) | TorchInspector generates the file; user opens separately |
-| W&B / Aim (future) | Backend protocol implementation | Each is a separate backend class |
-
-### Internal Boundaries
-
-| Boundary | Communication | Notes |
-|----------|---------------|-------|
-| Inspector → HookManager | Direct method calls | Inspector owns HookManager lifecycle |
-| HookManager → Collectors | Shared activation cache dict | Thread-safe only if no async collectors (v1: synchronous only) |
-| Collectors → Backend | Method calls on Protocol | Collectors don't know which backend is active |
-| Inspector → User | Return values + exceptions | Never swallow PyTorch exceptions silently |
-
-## Sources
-
-- [PyTorch Lightning Callback System](https://lightning.ai/docs/pytorch/stable/extensions/callbacks.html) — Reference architecture for training hooks
-- [PyTorch Hook Documentation](https://pytorch.org/docs/stable/nn.html#hooks) — Official hook API
-- [PyTorch TensorBoard Docs](https://pytorch.org/docs/stable/tensorboard.html) — SummaryWriter API
-- [Python Packaging Guide](https://packaging.python.org/) — src layout and pyproject.toml standards
+**Complexity:** LOW — extending existing collector, no new hooks, no new backend methods.
 
 ---
-*Architecture research for: PyTorch Training Observation Library*
-*Researched: 2026-06-08*
+
+### METRIC-02: Weight/Gradient Ratio Monitoring
+
+**What it does:** Computes per-layer `||weight|| / ||gradient||` ratio. A healthy ratio indicates balanced learning. Ratio → 0 means vanishing gradients; ratio → infinity means exploding weights or dead gradients. More granular than the existing `update_ratio` in GradientCollector (which computes `||grad|| / ||weight||`).
+
+**Integration point: NEW `WeightGradRatioCollector`**
+
+**Why a new collector, not extending GradientCollector:** GradientCollector focuses on gradient norms. The weight/gradient ratio is a derived metric with its own semantics (vanishing/exploding detection, per-layer health classification). Mixing it into GradientCollector would bloat that collector and violate single-responsibility. The ratio also needs access to both `param.data` and `param.grad` simultaneously, plus trend monitoring integration — a clean separation justifies a new file.
+
+**Constructor signature:**
+```python
+class WeightGradRatioCollector:
+    def __init__(
+        self,
+        model: nn.Module,
+        hook_manager: HookManager,
+        backend: TensorBoardBackend,
+        monitor: TrendMonitor,
+        *,
+        ratio_interval: int = 100,
+        vanishing_threshold: float = 1e-4,
+        exploding_threshold: float = 1e4,
+    ) -> None:
+```
+
+**What it computes per watched layer's parameters:**
+1. `weight_norm = param.data.norm(p=2)`
+2. `grad_norm = param.grad.norm(p=2)` (if grad exists)
+3. `ratio = weight_norm / (grad_norm + eps)` — the weight-to-gradient ratio
+4. `log_ratio = log10(ratio)` — for better visualization on log scale
+5. Health classification: `OK` if `vanishing_threshold < ratio < exploding_threshold`, else `WARN`
+
+**Data flow:**
+```
+model.named_parameters() → filter to watched layers
+  ├── compute ratio = ||w|| / (||g|| + eps)
+  ├── write_scalar("wg_ratio/{param_name}/ratio", ratio, step)
+  ├── write_scalar("wg_ratio/{param_name}/log_ratio", log_ratio, step)
+  ├── monitor.check("wg_ratio/{layer}", ratio, threshold)
+  └── if ratio out of bounds → alert escalation via TrendMonitor
+```
+
+**TensorBoard output:**
+- `wg_ratio/{param_name}/ratio` — raw ratio per parameter
+- `wg_ratio/{param_name}/log_ratio` — log10 scale for better chart readability
+
+**Integration with TrendMonitor:**
+- Feed ratio values into `monitor.check()` for trend-based alerting
+- Add correlation rule: if `wg_ratio` rising AND `dead_neuron_ratio` rising → "gradient collapse" alert
+
+**Files to create:**
+- `src/torchinspector/collectors/weight_grad_ratio.py` — new collector
+- `tests/test_collectors/test_weight_grad_ratio.py` — unit tests
+
+**Files to modify:**
+- `src/torchinspector/collectors/__init__.py` — add to `__all__`
+- `src/torchinspector/inspector.py` — instantiate + wire into `step()`
+
+**Complexity:** MEDIUM — new collector, but follows established pattern exactly. No new hooks needed (reads from `named_parameters()` like ParamCollector/GradientCollector).
+
+---
+
+### METRIC-03: Convergence Trajectory Analysis
+
+**What it does:** Analyzes loss trajectory to predict convergence behavior: is the model converging, plateauing, or diverging? Estimates steps-to-convergence, detects oscillation patterns, warns about divergence risk.
+
+**Integration point: ENHANCE existing `TrendMonitor` + NEW `ConvergenceCollector`**
+
+**Why two changes:**
+1. TrendMonitor already has `_compute_slope()`, rolling windows, and alert escalation — the convergence analysis logic (slope computation, plateau detection) belongs there as new methods.
+2. A thin collector is needed to bridge the loss value from `step()` into TrendMonitor and write convergence-specific scalars to TensorBoard.
+
+**TrendMonitor additions (new methods):**
+
+```python
+def convergence_score(self, name: str) -> float | None:
+    """Compute convergence score: -1 (diverging) to +1 (converged).
+
+    Based on: slope direction, slope magnitude relative to mean,
+    oscillation frequency, and window stability.
+    """
+
+def oscillation_index(self, name: str) -> float | None:
+    """Count sign changes in slope over window. High = oscillating."""
+
+def estimated_steps_to_target(
+    self, name: str, target_value: float
+) -> int | None:
+    """Linear extrapolation: how many steps until metric reaches target.
+    Returns None if slope is non-negative (not converging).
+    """
+```
+
+**ConvergenceCollector:**
+```python
+class ConvergenceCollector:
+    def __init__(
+        self,
+        monitor: TrendMonitor,
+        backend: TensorBoardBackend,
+        *,
+        convergence_interval: int = 100,
+        loss_smoothing_alpha: float = 0.1,
+    ) -> None:
+```
+
+**What it does each step:**
+1. Receives loss value from Inspector.step()
+2. Computes EMA-smoothed loss
+3. Feeds raw + smoothed loss into TrendMonitor
+4. Calls `monitor.convergence_score("loss")` and writes scalar
+5. Calls `monitor.oscillation_index("loss")` and writes scalar
+6. Calls `monitor.estimated_steps_to_target("loss", target)` if user set a target
+
+**Data flow:**
+```
+Inspector.step(loss=X)
+  └── ConvergenceCollector.collect(step, loss=X)
+        ├── ema_loss = alpha * X + (1-alpha) * prev_ema
+        ├── monitor.check("train/loss", ema_loss, ...)
+        ├── monitor.check("train/loss_raw", X, ...)
+        ├── write_scalar("convergence/smoothed_loss", ema_loss, step)
+        ├── write_scalar("convergence/score", score, step)      [-1..+1]
+        ├── write_scalar("convergence/oscillation", osc_idx, step)
+        └── write_scalar("convergence/est_steps_remaining", N, step) [optional]
+```
+
+**TensorBoard output:**
+- `convergence/smoothed_loss` — EMA-smoothed loss (less noisy than raw)
+- `convergence/score` — convergence score in [-1, +1]
+- `convergence/oscillation` — oscillation index (higher = more unstable)
+- `convergence/est_steps_remaining` — linear extrapolation to target (if set)
+
+**New Inspector API:**
+```python
+inspector = Inspector(model, optimizer, log_dir="runs/exp",
+                      convergence_target=0.01)  # optional target loss
+```
+
+**Files to modify:**
+- `src/torchinspector/monitor.py` — add `convergence_score()`, `oscillation_index()`, `estimated_steps_to_target()`
+- `src/torchinspector/inspector.py` — instantiate ConvergenceCollector, pass loss to it from `step()`
+
+**Files to create:**
+- `src/torchinspector/collectors/convergence.py` — new collector
+- `tests/test_collectors/test_convergence.py` — unit tests
+- `tests/test_monitor_convergence.py` — TrendMonitor method tests
+
+**Complexity:** MEDIUM — TrendMonitor enhancement is straightforward math; the collector is a thin bridge. The convergence_score algorithm needs careful tuning but is well-defined (slope + oscillation + stability).
+
+---
+
+### METRIC-04: Batch Size Sensitivity Analysis
+
+**What it does:** Tracks gradient variance across micro-batches within a logical step, estimates the signal-to-noise ratio (SNR) of gradients, and helps users understand how batch size affects training stability.
+
+**Integration point: NEW `BatchSensitivityCollector`**
+
+**Why a new collector:** This feature requires the user to provide gradient statistics from multiple forward/backward passes (or a single pass with gradient accumulation). It has a fundamentally different data flow — the user must call a method to register micro-batch gradients, then the collector computes variance across them. No existing collector has this pattern.
+
+**Design approach:**
+
+The user calls `inspector.log_micro_batch(loss=...)` multiple times per logical step, then calls `inspector.step()` which triggers the variance computation. Alternatively, for gradient accumulation, the user calls `inspector.log_accumulated_step()` after each accumulation phase.
+
+**Constructor signature:**
+```python
+class BatchSensitivityCollector:
+    def __init__(
+        self,
+        model: nn.Module,
+        hook_manager: HookManager,
+        backend: TensorBoardBackend,
+        monitor: TrendMonitor,
+        *,
+        sensitivity_interval: int = 100,
+    ) -> None:
+```
+
+**State it maintains:**
+- `_micro_batch_grads: dict[str, list[torch.Tensor]]` — per-parameter gradient snapshots across micro-batches
+- `_micro_batch_losses: list[float]` — loss values per micro-batch
+- `_micro_batch_count: int` — count within current logical step
+
+**Data flow (two modes):**
+
+**Mode A: Gradient accumulation (recommended)**
+```
+for micro_batch in accumulation_steps:
+    loss = model(micro_batch)
+    loss.backward()
+    inspector.log_micro_batch(loss=loss.item())  # NEW API
+
+inspector.step()  # triggers variance computation
+```
+
+**Mode B: Manual gradient snapshots**
+```
+# User manually captures gradients at different batch sizes
+inspector.log_gradient_snapshot(batch_size=32)
+# ... train with different batch size ...
+inspector.log_gradient_snapshot(batch_size=64)
+inspector.step()
+```
+
+**What it computes:**
+1. **Gradient variance** — `Var(grad)` across micro-batches per parameter
+2. **Gradient SNR** — `||E(grad)|| / sqrt(Var(grad))` per parameter
+3. **Loss variance** — `Var(loss)` across micro-batches
+4. **Effective batch size estimate** — from gradient variance ratio
+
+**TensorBoard output:**
+- `batch_sensitivity/{param_name}/grad_variance` — gradient variance per parameter
+- `batch_sensitivity/{param_name}/grad_snr` — signal-to-noise ratio
+- `batch_sensitivity/loss_variance` — loss variance across micro-batches
+- `batch_sensitivity/effective_batch_size` — estimated effective batch size
+
+**Inspector API additions:**
+```python
+def log_micro_batch(self, **metrics: float) -> None:
+    """Register a micro-batch gradient snapshot for batch sensitivity analysis.
+
+    Call this after each .backward() in an accumulation cycle.
+    The collector will snapshot gradients for watched layer parameters.
+    """
+
+def log_gradient_snapshot(self, *, batch_size: int | None = None) -> None:
+    """Snapshot current gradients with optional batch_size label.
+
+    For manual batch size comparison experiments.
+    """
+```
+
+**Integration with TrendMonitor:**
+- Feed SNR values into `monitor.check()` — low SNR = unstable training
+- Correlation rule: low SNR + high loss variance → "increase batch size" advisory
+
+**Files to create:**
+- `src/torchinspector/collectors/batch_sensitivity.py` — new collector
+- `tests/test_collectors/test_batch_sensitivity.py` — unit tests
+
+**Files to modify:**
+- `src/torchinspector/collectors/__init__.py` — add to `__all__`
+- `src/torchinspector/inspector.py` — add `log_micro_batch()`, `log_gradient_snapshot()` methods; instantiate collector
+
+**Complexity:** HIGH — most complex of the 4. Requires new user-facing API methods, gradient snapshot storage, and careful memory management (must clear snapshot lists after each `step()`).
+
+---
+
+## Integration Matrix
+
+| Feature | New Collector? | Modify Existing? | New Hooks? | New Backend Methods? | New Inspector API? |
+|---------|---------------|------------------|------------|---------------------|-------------------|
+| METRIC-01 LR Scheduler | No | ScalarCollector | No | No | No (optional scheduler param) |
+| METRIC-02 Weight/Grad Ratio | Yes: `WeightGradRatioCollector` | No | No | No | No |
+| METRIC-03 Convergence | Yes: `ConvergenceCollector` | TrendMonitor | No | No | `convergence_target` param |
+| METRIC-04 Batch Sensitivity | Yes: `BatchSensitivityCollector` | No | No | No | `log_micro_batch()`, `log_gradient_snapshot()` |
+
+## Data Flow Diagram (Complete)
+
+```
+[Training Loop]
+    │
+    ├── forward pass → HookManager caches activations
+    ├── loss.backward() → gradients populated
+    ├── optimizer.step() → weights updated
+    │
+    └── inspector.step(loss=X)
+          │
+          ├── step += 1
+          │
+          ├── ScalarCollector.collect(step)
+          │     ├── write train/loss, train/lr, train/lr_delta [ENHANCED]
+          │     ├── write system/gpu_memory, system/batch_time
+          │     └── monitor.check("lr", ...) [NEW]
+          │
+          ├── ConvergenceCollector.collect(step, loss=X) [NEW]
+          │     ├── compute EMA smoothed loss
+          │     ├── write convergence/smoothed_loss
+          │     ├── write convergence/score, convergence/oscillation
+          │     └── monitor.check("loss", ema_loss, ...)
+          │
+          ├── if step % log_interval == 0:
+          │     ├── ParamCollector.collect(step)        [existing]
+          │     ├── ActivationCollector.collect(step)    [existing]
+          │     ├── GradientCollector.collect(step)      [existing]
+          │     └── WeightGradRatioCollector.collect(step) [NEW]
+          │           ├── compute ||w|| / (||g|| + eps) per param
+          │           ├── write wg_ratio/{name}/ratio
+          │           └── monitor.check("wg_ratio", ...)
+          │
+          ├── BatchSensitivityCollector.collect(step) [NEW]
+          │     ├── compute gradient variance across micro-batches
+          │     ├── write batch_sensitivity/grad_variance, grad_snr
+          │     └── clear snapshot buffers
+          │
+          ├── FeatureMapCollector.collect(step)     [existing]
+          ├── WeightCollector.collect(step)         [existing]
+          ├── NormalizationCollector.collect(step)   [existing]
+          ├── RNNCollector.collect(step)            [existing]
+          ├── ResidualCollector.collect(step)       [existing]
+          │
+          └── if step % health_report_interval == 0:
+                └── monitor.print_report(step, loss)
+                      ├── existing alerts (dead neuron, gradient spike, plateau)
+                      ├── NEW: LR anomaly alerts
+                      ├── NEW: convergence score + oscillation
+                      ├── NEW: weight/gradient ratio health
+                      └── NEW: batch sensitivity SNR warning
+```
+
+## Build Order (Dependency Analysis)
+
+```
+Phase A: METRIC-01 (LR Scheduler Analysis)
+  ├── Depends on: nothing new (extends ScalarCollector)
+  ├── Risk: LOW
+  └── Effort: ~1-2 hours
+
+Phase B: METRIC-02 (Weight/Gradient Ratio)
+  ├── Depends on: nothing new (standalone collector)
+  ├── Risk: LOW
+  └── Effort: ~2-3 hours
+
+Phase C: METRIC-03 (Convergence Trajectory)
+  ├── Depends on: TrendMonitor enhancements
+  ├── Risk: MEDIUM (convergence_score algorithm tuning)
+  └── Effort: ~3-4 hours
+
+Phase D: METRIC-04 (Batch Size Sensitivity)
+  ├── Depends on: nothing new (standalone collector + new API)
+  ├── Risk: HIGH (new user-facing API, memory management)
+  └── Effort: ~4-5 hours
+```
+
+**Recommended order: A → B → C → D**
+
+Rationale:
+- A and B are independent — can be done in parallel, but A is simpler so do it first for quick win
+- C depends on TrendMonitor math that B also uses — doing B first validates the TrendMonitor integration pattern
+- D is the most complex and has the most API surface area — do it last when the pattern is well-established
+
+## Key Architectural Decisions
+
+### Decision 1: No new hooks needed
+
+All 4 features read from existing data sources:
+- METRIC-01: `optimizer.param_groups` (already accessed by ScalarCollector)
+- METRIC-02: `model.named_parameters()` + `.grad` (already accessed by GradientCollector)
+- METRIC-03: loss value passed by user to `step()` (already available)
+- METRIC-04: gradient snapshots from `param.grad` (already available after backward)
+
+No backward hooks or new forward hooks are required. The HookManager is unchanged.
+
+### Decision 2: TrendMonitor is the shared intelligence layer
+
+All 4 features feed into TrendMonitor for alerting. This is the right place — TrendMonitor already has rolling windows, slope computation, and alert escalation. Adding correlation rules (e.g., "low LR + high loss = LR too low") is a natural extension.
+
+New TrendMonitor correlation rules for v1.3:
+1. `lr_plateau_with_loss_plateau` — LR flat AND loss flat → suggest LR schedule
+2. `wg_ratio_extreme` — weight/gradient ratio outside [1e-4, 1e4] → vanishing/exploding
+3. `low_gradient_snr` — SNR < threshold → suggest larger batch size
+4. `convergence_diverging` — convergence score < -0.5 → training diverging
+
+### Decision 3: ConvergenceCollector is a thin bridge, not a brain
+
+The convergence math lives in TrendMonitor (reusable, testable). The collector just:
+1. Receives loss from Inspector
+2. Computes EMA
+3. Calls TrendMonitor methods
+4. Writes results to backend
+
+This follows the existing pattern where collectors are data movers, not analyzers.
+
+### Decision 4: BatchSensitivityCollector manages its own state
+
+Unlike other collectors that read from HookManager or model, this collector maintains internal buffers (`_micro_batch_grads`, `_micro_batch_losses`). This is a new pattern but justified — the data is transient (cleared after each `step()`) and specific to this feature.
+
+Memory management: buffers are cleared in `collect()` after computation. No risk of accumulation.
+
+## TensorBoard Namespace Plan
+
+```
+train/                           — ScalarCollector (existing + enhanced)
+  lr, lr_delta, lr_change_event  — LR scheduler analysis [METRIC-01]
+
+wg_ratio/                        — WeightGradRatioCollector [METRIC-02]
+  {param_name}/ratio             — raw weight/gradient ratio
+  {param_name}/log_ratio         — log10 scale
+
+convergence/                     — ConvergenceCollector [METRIC-03]
+  smoothed_loss                  — EMA-smoothed loss
+  score                          — convergence score [-1, +1]
+  oscillation                    — oscillation index
+  est_steps_remaining            — steps to target (optional)
+
+batch_sensitivity/               — BatchSensitivityCollector [METRIC-04]
+  {param_name}/grad_variance     — gradient variance
+  {param_name}/grad_snr          — signal-to-noise ratio
+  loss_variance                  — loss variance
+  effective_batch_size           — estimated effective batch size
+```
+
+## Risk Assessment
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Convergence score algorithm is too noisy | Useless predictions | EMA smoothing + require minimum window (20+ points) before reporting |
+| BatchSensitivityCollector memory usage | OOM on large models with many micro-batches | Clear buffers after each step; limit to watched layers only |
+| Weight/grad ratio NaN on zero gradients | Crash or bad data | Guard with `grad_norm > eps` check; skip parameter if grad is None |
+| LR scheduler not attached to optimizer | Silent no-logging | Detect and warn; still log LR from param_groups (works without scheduler) |
+| TrendMonitor alert fatigue | Too many alerts | Existing escalation (INFO → WARN → CRITICAL with consecutive counts) handles this |
+
+## Files Summary
+
+**New files (4):**
+- `src/torchinspector/collectors/weight_grad_ratio.py`
+- `src/torchinspector/collectors/convergence.py`
+- `src/torchinspector/collectors/batch_sensitivity.py`
+- `tests/test_collectors/test_lr_scheduler.py`
+- `tests/test_collectors/test_weight_grad_ratio.py`
+- `tests/test_collectors/test_convergence.py`
+- `tests/test_collectors/test_batch_sensitivity.py`
+- `tests/test_monitor_convergence.py`
+
+**Modified files (4):**
+- `src/torchinspector/collectors/scalar.py` — LR delta + event detection
+- `src/torchinspector/collectors/__init__.py` — add 3 new collectors to `__all__`
+- `src/torchinspector/inspector.py` — wire 3 new collectors + 2 new API methods
+- `src/torchinspector/monitor.py` — add convergence_score, oscillation_index, estimated_steps_to_target, new correlation rules
+
+**Unchanged files:**
+- `src/torchinspector/hooks.py` — no changes
+- `src/torchinspector/backends/tensorboard.py` — no changes (existing write_scalar/write_histogram suffice)
+- All existing collectors — no changes
+
+---
+*Architecture research for: v1.3 Universal Monitoring Enhancement*
+*Researched: 2026-06-15*
