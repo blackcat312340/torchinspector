@@ -378,9 +378,9 @@ class TestWatchAutoE2E:
 
             # Reports should fire at steps 10, 20, 30
             assert mock_print.call_count == 3
-            mock_print.assert_any_call(10, pytest.approx(mock_print.call_args_list[0][0][1], rel=0.1))
-            mock_print.assert_any_call(20, pytest.approx(mock_print.call_args_list[1][0][1], rel=0.1))
-            mock_print.assert_any_call(30, pytest.approx(mock_print.call_args_list[2][0][1], rel=0.1))
+            for i, step in enumerate([10, 20, 30]):
+                expected_loss = mock_print.call_args_list[i][0][1]
+                mock_print.assert_any_call(step, pytest.approx(expected_loss, rel=0.1))
         finally:
             shutil.rmtree(log_dir, ignore_errors=True)
 
@@ -395,7 +395,7 @@ class TestWatchAutoE2E:
                 log_interval=5,
                 health_report_interval=10,
             )
-            selected = ins.watch_auto(max_layers=5)
+            ins.watch_auto(max_layers=5)
 
             for step in range(20):
                 x = torch.randn(16, 784)
