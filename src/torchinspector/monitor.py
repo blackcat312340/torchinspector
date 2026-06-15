@@ -170,8 +170,8 @@ class TrendMonitor:
                     ))
 
         # Rule: loss flat for 5+ intervals
-        loss_keys = [k for k in metrics if "loss" in k.lower()]
-        for k in loss_keys:
+        loss_keys_raw = [k for k in metrics if "loss" in k.lower()]
+        for k in loss_keys_raw:
             win = self._windows.get(k, [])
             if len(win) >= 5:
                 recent = win[-5:]
@@ -181,6 +181,57 @@ class TrendMonitor:
                         AlertLevel.INFO,
                         f"{k}: flat for 5 intervals — possible plateau",
                     ))
+
+        # Rule: loss_stagnant AND lr_decreasing → WARN
+        loss_keys = [
+            k for k in loss_keys_raw
+            if not k.endswith((":short", ":medium", ":long"))
+        ]
+        lr_keys = [k for k in metrics if "lr" in k.lower() or "learning_rate" in k.lower()]
+        for k in loss_keys:
+            loss_slope = self._compute_slope(self._windows.get(k, []))
+            if loss_slope is not None and abs(loss_slope) < 0.001:
+                # Loss is flat — check if any LR is decreasing
+                for lr_k in lr_keys:
+                    lr_slope = self._compute_slope(self._windows.get(lr_k, []))
+                    if lr_slope is not None and lr_slope < 0:
+                        alerts.append((
+                            "loss_stagnant_lr_decreasing",
+                            AlertLevel.WARN,
+                            "Loss plateau while LR decreasing — "
+                            "consider adjusting scheduler",
+                        ))
+                        break  # One alert per rule is enough
+
+        # Rule: convergence_slow AND gradient_declining → WARN
+        grad_keys_filtered = [k for k in metrics if "gradient" in k and "norm" in k]
+        if self._last_convergence_score is not None and self._last_convergence_score < 40:
+            for k in grad_keys_filtered:
+                grad_slope = self._compute_slope(self._windows.get(k, []))
+                if grad_slope is not None and grad_slope < 0:
+                    alerts.append((
+                        "convergence_slow_gradient_declining",
+                        AlertLevel.WARN,
+                        "Slow convergence + falling gradients — "
+                        "possible vanishing gradient",
+                    ))
+                    break
+
+        # Rule: convergence_slow AND wgr_abnormal → WARN
+        ratio_keys = [k for k in metrics if "ratio" in k.lower()]
+        if self._last_convergence_score is not None and self._last_convergence_score < 40:
+            for k in ratio_keys:
+                win = self._windows.get(k, [])
+                if win:
+                    latest = win[-1]
+                    if latest > 1000 or latest < 0.001:
+                        alerts.append((
+                            "convergence_slow_wgr_abnormal",
+                            AlertLevel.WARN,
+                            "Slow convergence + abnormal W/G ratio — "
+                            "adjust learning rate",
+                        ))
+                        break
 
         return alerts
 
