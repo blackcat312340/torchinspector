@@ -15,6 +15,7 @@ from torchinspector.collectors.weight_grad_ratio import (
     _EPS,
 )
 from torchinspector.hooks import HookManager
+from torchinspector.monitor import TrendMonitor
 
 
 class TestComputeLogRatio:
@@ -69,15 +70,21 @@ class TestBackwardHook:
         return MagicMock(spec=TensorBoardBackend)
 
     @pytest.fixture
+    def monitor(self) -> MagicMock:
+        """Mocked TrendMonitor."""
+        return MagicMock(spec=TrendMonitor)
+
+    @pytest.fixture
     def collector(
         self,
         model: nn.Module,
         hook_manager: HookManager,
         backend: MagicMock,
+        monitor: MagicMock,
     ) -> WeightGradRatioCollector:
         """WeightGradRatioCollector with log_interval=10."""
         return WeightGradRatioCollector(
-            model, hook_manager, backend, log_interval=10
+            model, hook_manager, backend, monitor, log_interval=10
         )
 
     def test_backward_hook_caches_norm(
@@ -116,9 +123,10 @@ class TestBackwardHook:
         model.add_module("fc1", nn.Linear(4, 4))
 
         backend = MagicMock(spec=TensorBoardBackend)
+        monitor = MagicMock(spec=TrendMonitor)
         hm = HookManager(model)
         hm.watch(["fc1"])
-        collector = WeightGradRatioCollector(model, hm, backend, log_interval=10)
+        collector = WeightGradRatioCollector(model, hm, backend, monitor, log_interval=10)
 
         # Set FP16 gradients (use grad_dtype for PyTorch 2.x)
         fc1 = model.fc1  # type: ignore[attr-defined]
@@ -163,7 +171,8 @@ class TestCollectForModule:
         """WeightGradRatioCollector with mocked dependencies."""
         hm = MagicMock(spec=HookManager)
         hm._handles = {"fc1": MagicMock()}
-        return WeightGradRatioCollector(model, hm, backend, log_interval=10)
+        monitor = MagicMock(spec=TrendMonitor)
+        return WeightGradRatioCollector(model, hm, backend, monitor, log_interval=10)
 
     def test_writes_mean_max(
         self,
@@ -236,15 +245,21 @@ class TestCollect:
         return MagicMock(spec=TensorBoardBackend)
 
     @pytest.fixture
+    def monitor(self) -> MagicMock:
+        """Mocked TrendMonitor."""
+        return MagicMock(spec=TrendMonitor)
+
+    @pytest.fixture
     def collector(
         self,
         model: nn.Module,
         hook_manager: HookManager,
         backend: MagicMock,
+        monitor: MagicMock,
     ) -> WeightGradRatioCollector:
         """WeightGradRatioCollector with log_interval=10."""
         return WeightGradRatioCollector(
-            model, hook_manager, backend, log_interval=10
+            model, hook_manager, backend, monitor, log_interval=10
         )
 
     def test_collect_skips_unwatched(
@@ -290,11 +305,12 @@ class TestCollect:
         self,
         model: nn.Module,
         backend: MagicMock,
+        monitor: MagicMock,
     ) -> None:
         """No watched layers → collect returns early."""
         hm = HookManager(model)
         collector = WeightGradRatioCollector(
-            model, hm, backend, log_interval=10
+            model, hm, backend, monitor, log_interval=10
         )
 
         x = torch.randn(2, 4, requires_grad=True)
@@ -325,8 +341,9 @@ class TestClose:
         hm = HookManager(model)
         hm.watch(["fc1"])
         backend = MagicMock(spec=TensorBoardBackend)
+        monitor = MagicMock(spec=TrendMonitor)
         collector = WeightGradRatioCollector(
-            model, hm, backend, log_interval=10
+            model, hm, backend, monitor, log_interval=10
         )
 
         collector._ensure_hooks({"fc1"})
@@ -346,8 +363,9 @@ class TestClose:
         hm = HookManager(model)
         hm.watch(["fc1"])
         backend = MagicMock(spec=TensorBoardBackend)
+        monitor = MagicMock(spec=TrendMonitor)
         collector = WeightGradRatioCollector(
-            model, hm, backend, log_interval=10
+            model, hm, backend, monitor, log_interval=10
         )
 
         collector._ensure_hooks({"fc1"})
@@ -366,8 +384,9 @@ class TestEnsureHooksIdempotent:
         hm = HookManager(model)
         hm.watch(["fc1"])
         backend = MagicMock(spec=TensorBoardBackend)
+        monitor = MagicMock(spec=TrendMonitor)
         collector = WeightGradRatioCollector(
-            model, hm, backend, log_interval=10
+            model, hm, backend, monitor, log_interval=10
         )
 
         collector._ensure_hooks({"fc1"})
@@ -389,8 +408,9 @@ class TestEndToEnd:
         hm = HookManager(model)
         hm.watch(["fc1", "fc2"])
         backend = MagicMock(spec=TensorBoardBackend)
+        monitor = MagicMock(spec=TrendMonitor)
         collector = WeightGradRatioCollector(
-            model, hm, backend, log_interval=10
+            model, hm, backend, monitor, log_interval=10
         )
 
         # Pre-register hooks so they fire during backward
@@ -425,8 +445,9 @@ class TestEndToEnd:
         hm = HookManager(model)
         hm.watch(["fc1"])
         backend = MagicMock(spec=TensorBoardBackend)
+        monitor = MagicMock(spec=TrendMonitor)
         collector = WeightGradRatioCollector(
-            model, hm, backend, log_interval=10
+            model, hm, backend, monitor, log_interval=10
         )
 
         # Pre-register hooks

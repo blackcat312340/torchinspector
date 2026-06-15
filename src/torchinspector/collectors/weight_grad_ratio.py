@@ -12,6 +12,7 @@ from torch.utils.hooks import RemovableHandle
 if TYPE_CHECKING:
     from torchinspector.backends.tensorboard import TensorBoardBackend
     from torchinspector.hooks import HookManager
+    from torchinspector.monitor import TrendMonitor
 
 _EPS = 1e-8
 
@@ -34,19 +35,22 @@ class WeightGradRatioCollector:
         model: nn.Module,
         hook_manager: HookManager,
         backend: TensorBoardBackend,
+        monitor: TrendMonitor,
         log_interval: int = 100,
     ) -> None:
-        """Initialize with model, hook manager, backend, and interval.
+        """Initialize with model, hook manager, backend, monitor, and interval.
 
         Args:
             model: The PyTorch model to read parameters from.
             hook_manager: The HookManager tracking watched layers.
             backend: The TensorBoard backend to write to.
+            monitor: The TrendMonitor for trend detection and alerting.
             log_interval: Steps between ratio collections.
         """
         self._model = model
         self._hook_manager = hook_manager
         self._backend = backend
+        self._monitor = monitor
         self._log_interval = log_interval
         self._grad_norm_cache: dict[str, float] = {}
         self._backward_handles: list[RemovableHandle] = []
@@ -146,6 +150,9 @@ class WeightGradRatioCollector:
         max_ratio = max(ratios)
         self._backend.write_scalar(f"ratios/{name}/mean", mean_ratio, step)
         self._backend.write_scalar(f"ratios/{name}/max", max_ratio, step)
+
+        # Feed TrendMonitor for multi-scale trend detection
+        self._monitor.check_wgr(name, mean_ratio, step)
 
     def collect(self, step: int) -> None:
         """Collect and write W/G ratios if at log interval.
