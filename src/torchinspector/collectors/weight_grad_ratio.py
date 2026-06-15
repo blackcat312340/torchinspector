@@ -101,3 +101,22 @@ class WeightGradRatioCollector:
             )
             self._backward_handles.append(handle)
             self._backward_hook_names.add(name)
+
+    @staticmethod
+    def _compute_log_ratio(weight_norm: float, grad_norm: float) -> float:
+        """Compute log-space weight/gradient ratio.
+
+        ``log(||w|| + eps) - log(||grad|| + eps)``
+
+        Positive → weight dominates (vanishing risk).
+        Negative → gradient dominates (exploding risk).
+        Zero → balanced.
+
+        Args:
+            weight_norm: L2 norm of the weight tensor.
+            grad_norm: L2 norm of the gradient tensor.
+
+        Returns:
+            Log-space ratio.
+        """
+        return math.log(weight_norm + _EPS) - math.log(grad_norm + _EPS)
