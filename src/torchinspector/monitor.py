@@ -429,6 +429,14 @@ class TrendMonitor:
             for rule, level, msg in corr_alerts[:3]:
                 lines.append(f"  {level.name:8s} [{rule}] {msg}")
 
+        # WGR summary
+        wgr_alert_keys = [k for k in self._current_alerts if k.startswith("wgr/")]
+        if wgr_alert_keys:
+            ok_count = sum(1 for k in wgr_alert_keys if self._current_alerts[k] == AlertLevel.OK)
+            warn_count_wgr = sum(1 for k in wgr_alert_keys if self._current_alerts[k] >= AlertLevel.WARN)
+            crit_count_wgr = sum(1 for k in wgr_alert_keys if self._current_alerts[k] == AlertLevel.CRITICAL)
+            lines.append(f"  WGR: {ok_count} OK, {warn_count_wgr} WARN, {crit_count_wgr} CRITICAL")
+
         # Summary
         crit_count = sum(1 for n, lvl in self._current_alerts.items() if lvl == AlertLevel.CRITICAL)
         warn_count = sum(1 for n, lvl in self._current_alerts.items() if lvl == AlertLevel.WARN)
