@@ -50,3 +50,54 @@ class WeightGradRatioCollector:
         self._log_interval = log_interval
         self._grad_norm_cache: dict[str, float] = {}
         self._backward_handles: list[RemovableHandle] = []
+        self._backward_hook_names: set[str] = set()
+
+    def _make_backward_hook(self, name: str) -> Callable[..., None]:
+        """Create a backward hook closure for a named module.
+
+        The hook iterates the module's direct parameters, computes the
+        L2 gradient norm from ``param.grad``, and caches it under
+        ``self._grad_norm_cache[name]``.
+
+        Args:
+            name: The module name to associate with cached gradient norms.
+        """
+        def hook(module: nn.Module, grad_input: tuple, grad_output: tuple) -> None:
+            total_norm_sq = 0.0
+            for param in module.parameters(recurse=False):
+                if param.grad is None:
+                    continue
+                g = param.grad.detach().float()
+                if not g.isfinite().all():
+                    continue
+                total_norm_sq += g.norm(p=2).item() ** 2
+            if total_norm_sq > 0:
+                self._grad_norm_cache[name] = total_norm_sq ** 0.5
+
+        return hook
+
+    def _ensure_hooks(self, watched: set[str]) -> None:
+        """Register backward hooks on watched modules if not already hooked.
+
+        Args:
+            watched: Set of module names to ensure hooks for.
+        """
+        modules = dict(self._model.named_modules())
+        # Names already handled
+        handled: set[str] = set()
+        for handle in self._backward_handles:
+            # RemovableHandle doesn't expose the module name directly,
+            # so we track via a set maintained alongside the handles list.
+            pass  # We use _backward_hook_names instead
+
+        for name in watched:
+            if name not in modules:
+                continue
+            if name in self._backward_hook_names:
+                continue  # Already registered
+            module = modules[name]
+            handle = module.register_full_backward_hook(
+                self._make_backward_hook(name)
+            )
+            self._backward_handles.append(handle)
+            self._backward_hook_names.add(name)
