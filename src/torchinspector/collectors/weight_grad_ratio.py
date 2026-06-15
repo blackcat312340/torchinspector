@@ -130,8 +130,6 @@ class WeightGradRatioCollector:
         """
         ratios: list[float] = []
         for _param_name, param in module.named_parameters(recurse=False):
-            if param.grad is None:
-                continue
             w_norm = param.detach().float().norm(p=2).item()
             g_norm = self._grad_norm_cache.get(name)
             if g_norm is None:
