@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -203,6 +204,11 @@ class Inspector:
         self._step += 1
         self._scalar_collector.collect(self._step, **metrics)
 
+        # Convergence tracking — cheap (<0.1ms), runs every step
+        loss_val = metrics.get("loss")
+        if loss_val is not None:
+            self._monitor.check_convergence(loss_val, self._step)
+
         if self._step % self._log_interval == 0:
             self._param_collector.collect(self._step)
             self._activation_collector.collect(self._step)
@@ -215,7 +221,7 @@ class Inspector:
         self._residual_collector.collect(self._step)
 
         if self._step % self._health_report_interval == 0:
-            loss_val = metrics.get("loss") if metrics else None
+            self._log_convergence_scalars(loss_val)
             self._monitor.print_report(self._step, loss_val)
 
     def log_histograms(
@@ -378,6 +384,38 @@ class Inspector:
             target=target,
             target_layer=target_layer,
         )
+
+    # -- Private helpers ----------------------------------------------------
+
+    def _log_convergence_scalars(self, loss_val: float | None) -> None:
+        """Log convergence metrics to TensorBoard at health_report_interval.
+
+        Writes 5 tags:
+        - convergence/score
+        - convergence/est_steps (skipped when None)
+        - convergence/slope:short
+        - convergence/slope:medium
+        - convergence/slope:long
+        """
+        if loss_val is None or not math.isfinite(loss_val):
+            return
+
+        score = self._monitor.convergence_score(loss_val)
+        self._backend.write_scalar("convergence/score", score, self._step)
+
+        est_steps = self._monitor.estimated_convergence_steps(loss_val)
+        if est_steps is not None:
+            self._backend.write_scalar("convergence/est_steps", float(est_steps), self._step)
+
+        # Log slopes for each sub-window
+        for suffix in (":short", ":medium", ":long"):
+            key = f"train/loss{suffix}"
+            win = self._monitor._windows.get(key, [])
+            slope = self._monitor._compute_slope(win)
+            if slope is not None:
+                self._backend.write_scalar(
+                    f"convergence/slope{suffix}", slope, self._step
+                )
 
     def close(self) -> None:
         """Close Inspector and release all resources.
