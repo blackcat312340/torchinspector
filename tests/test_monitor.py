@@ -685,3 +685,148 @@ class TestHealthReportInterval:
             mock_print.assert_called_once_with(1, None)
         finally:
             ins.close()
+
+
+# -- Multi-scale convergence windows ------------------------------------------
+
+
+class TestMultiScaleWindows:
+    """Tests for three sub-windows (short/medium/long) created by check_convergence."""
+
+    def test_sub_windows_created(self) -> None:
+        """check_convergence creates train/loss:short, :medium, :long keys."""
+        mon = TrendMonitor()
+        mon.check_convergence(1.0, step=1)
+        assert "train/loss:short" in mon._windows
+        assert "train/loss:medium" in mon._windows
+        assert "train/loss:long" in mon._windows
+
+    def test_short_window_truncation(self) -> None:
+        """Short window holds at most 10 values."""
+        mon = TrendMonitor()
+        for i in range(20):
+            mon.check_convergence(float(i), step=i)
+        assert len(mon._windows["train/loss:short"]) == 10
+
+    def test_medium_window_truncation(self) -> None:
+        """Medium window holds at most 50 values."""
+        mon = TrendMonitor()
+        for i in range(60):
+            mon.check_convergence(float(i), step=i)
+        assert len(mon._windows["train/loss:medium"]) == 50
+
+    def test_long_window_truncation(self) -> None:
+        """Long window holds at most 200 values."""
+        mon = TrendMonitor()
+        for i in range(250):
+            mon.check_convergence(float(i), step=i)
+        assert len(mon._windows["train/loss:long"]) == 200
+
+    def test_windows_contain_same_loss_values(self) -> None:
+        """All three sub-windows receive the same loss value per call."""
+        mon = TrendMonitor()
+        values = [0.5, 0.4, 0.3]
+        for i, v in enumerate(values):
+            mon.check_convergence(v, step=i)
+        assert mon._windows["train/loss:short"] == values
+        assert mon._windows["train/loss:medium"] == values
+        assert mon._windows["train/loss:long"] == values
+
+
+# -- NaN/Inf guard ------------------------------------------------------------
+
+
+class TestNaNInfGuard:
+    """Tests for NaN/Inf filtering before window insertion."""
+
+    def test_nan_returns_critical(self) -> None:
+        """NaN loss immediately returns CRITICAL."""
+        mon = TrendMonitor()
+        level = mon.check_convergence(float("nan"), step=10)
+        assert level == AlertLevel.CRITICAL
+
+    def test_inf_returns_critical(self) -> None:
+        """Inf loss immediately returns CRITICAL."""
+        mon = TrendMonitor()
+        level = mon.check_convergence(float("inf"), step=10)
+        assert level == AlertLevel.CRITICAL
+
+    def test_nan_not_inserted_into_windows(self) -> None:
+        """NaN is never inserted into any sub-window."""
+        mon = TrendMonitor()
+        mon.check_convergence(float("nan"), step=10)
+        assert mon._windows["train/loss:short"] == []
+        assert mon._windows["train/loss:medium"] == []
+        assert mon._windows["train/loss:long"] == []
+
+    def test_nan_tracks_step(self) -> None:
+        """NaN occurrence records the step number in _nan_steps."""
+        mon = TrendMonitor()
+        mon.check_convergence(float("nan"), step=10)
+        assert 10 in mon._nan_steps
+
+    def test_after_nan_valid_values_still_work(self) -> None:
+        """Valid values after NaN are inserted normally."""
+        mon = TrendMonitor()
+        mon.check_convergence(float("nan"), step=0)
+        mon.check_convergence(0.5, step=1)
+        mon.check_convergence(0.4, step=2)
+        assert mon._windows["train/loss:short"] == [0.5, 0.4]
+        assert mon._windows["train/loss:medium"] == [0.5, 0.4]
+        assert mon._windows["train/loss:long"] == [0.5, 0.4]
+
+
+# -- Divergence detection -----------------------------------------------------
+
+
+class TestDivergenceDetection:
+    """Tests for divergence detection via consecutive-rise counting."""
+
+    def test_no_divergence_on_few_points(self) -> None:
+        """Fewer than _SHORT_WINDOW points returns OK."""
+        mon = TrendMonitor()
+        for i in range(8):
+            level = mon.check_convergence(float(i), step=i)
+        assert level == AlertLevel.OK
+
+    def test_divergence_on_consecutive_rises(self) -> None:
+        """Consecutive rises triggers WARN then CRITICAL (2-check confirmation)."""
+        mon = TrendMonitor()
+        # Fill window with rising values; first trigger at step 9 (window full)
+        for i in range(10):
+            level = mon.check_convergence(float(i), step=i)
+        assert level == AlertLevel.WARN
+        # Second consecutive confirmation at step 10 escalates to CRITICAL
+        level = mon.check_convergence(10.0, step=10)
+        assert level == AlertLevel.CRITICAL
+
+    def test_divergence_resets_on_improvement(self) -> None:
+        """A single drop after divergence resets to OK."""
+        mon = TrendMonitor()
+        for i in range(12):
+            mon.check_convergence(float(i), step=i)
+        # Drop the loss — should reset divergence
+        level = mon.check_convergence(0.0, step=12)
+        assert level == AlertLevel.OK
+
+    def test_single_spike_no_false_positive(self) -> None:
+        """Single spike in otherwise flat data does not trigger divergence."""
+        mon = TrendMonitor()
+        for _ in range(12):
+            mon.check_convergence(1.0, step=0)
+        # Insert a single spike then back to flat
+        level = mon.check_convergence(5.0, step=1)
+        assert level == AlertLevel.OK
+
+    def test_divergence_two_check_confirmation(self) -> None:
+        """Divergence requires two consecutive confirmations for CRITICAL."""
+        mon = TrendMonitor()
+        # Fill window with rising values; first trigger at step 9
+        for i in range(10):
+            level = mon.check_convergence(float(i), step=i)
+        assert level == AlertLevel.WARN
+        assert mon._divergence_consecutive == 1
+        # Second confirmation at step 10 escalates to CRITICAL
+        level = mon.check_convergence(10.0, step=10)
+        assert level == AlertLevel.CRITICAL
+        assert mon._divergence_consecutive == 2
