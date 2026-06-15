@@ -83,12 +83,6 @@ class WeightGradRatioCollector:
             watched: Set of module names to ensure hooks for.
         """
         modules = dict(self._model.named_modules())
-        # Names already handled
-        handled: set[str] = set()
-        for handle in self._backward_handles:
-            # RemovableHandle doesn't expose the module name directly,
-            # so we track via a set maintained alongside the handles list.
-            pass  # We use _backward_hook_names instead
 
         for name in watched:
             if name not in modules:
