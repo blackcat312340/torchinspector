@@ -1,15 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: smart-monitoring
-status: shipped
-last_updated: "2026-06-15T11:30:00.000Z"
+milestone: v1.3
+milestone_name: 通用监控增强
+status: planning
+last_updated: "2026-06-15T11:43:13.727Z"
+last_activity: 2026-06-15
 progress:
-  v1_0_phases: 6
-  v1_1_phases: 3
-  v1_2_phases: 1
-  total_plans: 35
-  completed_plans: 35
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State: TorchInspector
@@ -42,3 +43,10 @@ See: .planning/PROJECT.md (updated 2026-06-15)
 | 2026-06-08 | TensorBoard as v1 backend | Ships with PyTorch, zero extra deps |
 | 2026-06-08 | Python 3.10+, Poetry, src layout | 2026 Python ecosystem standard |
 | 2026-06-08 | Vertical MVP mode | Each phase delivers end-to-end user capability |
+
+## Current Position
+
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-15 — Milestone v1.3 started

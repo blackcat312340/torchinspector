@@ -23,7 +23,20 @@ Make the internal state of PyTorch training loops observable through a clean, mi
 
 ### Active
 
-(All requirements validated — next milestone will define new ones)
+- [ ] **METRIC-01**: 学习率调度器效果分析 — 记录 lr 变化曲线、检测异常调度
+- [ ] **METRIC-02**: 权重/梯度比率监控 — 逐层 weight-to-gradient ratio，细粒度 vanishing/exploding 检测
+- [ ] **METRIC-03**: 收敛轨迹分析 — loss 趋势预测、收敛速度评估、发散预警
+- [ ] **METRIC-04**: 批量大小敏感度 — 不同 batch size 下的梯度方差、训练稳定性对比
+
+## Current Milestone: v1.3 通用监控增强
+
+**Goal:** 补全所有网络类型通用的监控指标，让训练可观测性更完整
+
+**Target features:**
+- 学习率调度器效果分析
+- 权重/梯度比率监控
+- 收敛轨迹分析
+- 批量大小敏感度分析
 
 ### Out of Scope
 
