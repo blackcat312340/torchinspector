@@ -217,19 +217,36 @@ class TrendMonitor:
                     ))
                     break
 
-        # Rule: convergence_slow AND wgr_abnormal → WARN
-        ratio_keys = [k for k in metrics if "ratio" in k.lower()]
+        # Rule: convergence_slow AND wgr_abnormal → CRITICAL (log-space thresholds)
+        wgr_keys = [k for k in metrics if "ratios/" in k and ":short" not in k and ":medium" not in k and ":long" not in k]
         if self._last_convergence_score is not None and self._last_convergence_score < 40:
-            for k in ratio_keys:
+            for k in wgr_keys:
                 win = self._windows.get(k, [])
                 if win:
                     latest = win[-1]
-                    if latest > 1000 or latest < 0.001:
+                    if latest > 6.0 or latest < -6.0:
                         alerts.append((
                             "convergence_slow_wgr_abnormal",
-                            AlertLevel.WARN,
+                            AlertLevel.CRITICAL,
                             "Slow convergence + abnormal W/G ratio — "
-                            "adjust learning rate",
+                            "possible vanishing/exploding gradient",
+                        ))
+                        break
+
+        # Rule: wgr_vanishing AND gradient_declining → WARN
+        grad_keys_filtered_2 = [k for k in metrics if "gradient" in k and "norm" in k]
+        for k in wgr_keys:
+            wgr_win = self._windows.get(k, [])
+            wgr_slope = self._compute_slope(wgr_win)
+            if wgr_slope is not None and wgr_slope > 0:  # Rising = vanishing trend
+                for gk in grad_keys_filtered_2:
+                    g_slope = self._compute_slope(self._windows.get(gk, []))
+                    if g_slope is not None and g_slope < 0:
+                        alerts.append((
+                            "wgr_vanishing_gradient_declining",
+                            AlertLevel.WARN,
+                            "W/G ratio rising + gradients falling — "
+                            "vanishing gradient confirmed",
                         ))
                         break
 
