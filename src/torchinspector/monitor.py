@@ -8,10 +8,15 @@ INFO → WARN → CRITICAL levels based on trend + threshold.
 from __future__ import annotations
 
 import enum
+import math  # noqa: F401 — used by check_convergence()
 import sys
 from collections import defaultdict
 
 import numpy as np
+
+_SHORT_WINDOW = 10
+_MEDIUM_WINDOW = 50
+_LONG_WINDOW = 200
 
 
 class AlertLevel(enum.IntEnum):
@@ -50,6 +55,10 @@ class TrendMonitor:
         self._windows: dict[str, list[float]] = defaultdict(list)
         self._alert_counts: dict[str, int] = defaultdict(int)
         self._current_alerts: dict[str, AlertLevel] = {}
+
+        # Convergence trajectory state
+        self._nan_steps: list[int] = []
+        self._divergence_consecutive: int = 0
 
     # -- Public API ---------------------------------------------------------
 
