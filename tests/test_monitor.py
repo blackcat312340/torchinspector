@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pytest
+import torch
+from torch import nn
 
 from torchinspector.monitor import AlertLevel, TrendMonitor
+
+if TYPE_CHECKING:
+    from torchinspector.inspector import Inspector
 
 # -- Slope computation --------------------------------------------------------
 
@@ -402,3 +410,278 @@ class TestTrendMonitorInit:
             levels.append(level)
         # Should not reach WARN since slope is negative (improving)
         assert AlertLevel.WARN not in levels
+
+
+# -- Health report format ------------------------------------------------------
+
+
+class TestReportFormat:
+    """Tests for health report format: trend arrows, top metrics, alerts, summary."""
+
+    def test_report_loss_trend_arrow_down(self) -> None:
+        """Report shows ↓ arrow for decreasing loss trend."""
+        mon = TrendMonitor()
+        # Feed decreasing loss values to establish trend
+        for v in [2.0, 1.8, 1.6, 1.4, 1.2]:
+            mon.check("train/loss", value=v, threshold=9999.0)
+        report = mon.report(step=100, loss=1.0)
+        assert "↓" in report
+
+    def test_report_loss_trend_arrow_up(self) -> None:
+        """Report shows ↑ arrow for increasing loss trend."""
+        mon = TrendMonitor()
+        # Feed increasing loss values
+        for v in [0.5, 0.7, 0.9, 1.1, 1.3]:
+            mon.check("train/loss", value=v, threshold=9999.0)
+        report = mon.report(step=100, loss=1.5)
+        assert "↑" in report
+
+    def test_report_loss_trend_arrow_flat(self) -> None:
+        """Report shows → arrow for flat loss trend."""
+        mon = TrendMonitor()
+        # Feed flat loss values
+        for v in [1.0, 1.001, 0.999, 1.002, 0.998]:
+            mon.check("train/loss", value=v, threshold=9999.0)
+        report = mon.report(step=100, loss=1.0)
+        assert "→" in report
+
+    def test_report_top_metrics_with_active_alerts(self) -> None:
+        """Report shows top metrics when WARN/CRITICAL alerts active."""
+        mon = TrendMonitor(window_size=20, warn_consecutive=2, critical_consecutive=5)
+        # Build up alerts on multiple metrics
+        for i in range(10):
+            mon.check("layer1/dead_neuron_ratio", value=0.8 + i * 0.02, threshold=0.5)
+            mon.check("layer2/dead_neuron_ratio", value=0.7 + i * 0.03, threshold=0.5)
+        report = mon.report(step=100, loss=1.0)
+        # Should contain WARN or CRITICAL lines for alerted metrics
+        assert "WARN" in report or "CRITICAL" in report
+        assert "layer1/dead_neuron_ratio" in report or "layer2/dead_neuron_ratio" in report
+
+    def test_report_active_alerts_limited_to_five(self) -> None:
+        """Report shows at most 5 active alert lines."""
+        mon = TrendMonitor(window_size=20, warn_consecutive=2, critical_consecutive=5)
+        # Create alerts on 7 different metrics
+        for i in range(10):
+            for j in range(7):
+                mon.check(f"layer{j}/metric", value=2.0 + i * 0.1, threshold=0.5)
+        report = mon.report(step=100, loss=1.0)
+        # Count alert lines (lines starting with WARN or CRITICAL)
+        alert_lines = [
+            line for line in report.split("\n")
+            if "WARN" in line or "CRITICAL" in line
+        ]
+        # Should be at most 5 (plus summary line if it contains CRITICAL/WARN)
+        # Filter out summary line
+        non_summary_alerts = [
+            line for line in alert_lines
+            if "Summary:" not in line and "INTERVENE" not in line
+        ]
+        assert len(non_summary_alerts) <= 5
+
+    def test_report_summary_training_ok(self) -> None:
+        """Report shows 'Training OK' when no active alerts."""
+        mon = TrendMonitor()
+        report = mon.report(step=100, loss=1.0)
+        assert "Training OK" in report
+
+    def test_report_summary_monitor(self) -> None:
+        """Report shows 'Monitor' when WARN alerts active."""
+        mon = TrendMonitor(window_size=20, warn_consecutive=2, critical_consecutive=10)
+        for i in range(10):
+            mon.check("m", value=2.0 + i * 0.1, threshold=0.5)
+        report = mon.report(step=100, loss=1.0)
+        assert "Monitor" in report
+
+    def test_report_summary_intervene(self) -> None:
+        """Report shows 'INTERVENE' when CRITICAL alerts active."""
+        mon = TrendMonitor(window_size=20, warn_consecutive=2, critical_consecutive=5)
+        for i in range(15):
+            mon.check("m", value=2.0 + i * 0.05, threshold=0.5, margin=0.1)
+        report = mon.report(step=100, loss=1.0)
+        assert "INTERVENE" in report
+
+    def test_report_header_contains_step(self) -> None:
+        """Report header includes 'TorchInspector' and step number."""
+        mon = TrendMonitor()
+        report = mon.report(step=42, loss=1.0)
+        assert "[TorchInspector]" in report
+        assert "Step 42" in report
+
+    def test_report_loss_formatting(self) -> None:
+        """Report formats loss to 4 decimal places."""
+        mon = TrendMonitor()
+        report = mon.report(step=1, loss=0.123456789)
+        assert "0.1235" in report
+
+    def test_report_no_loss_line_when_none(self) -> None:
+        """Report omits loss line when loss=None."""
+        mon = TrendMonitor()
+        report = mon.report(step=1, loss=None)
+        assert "Loss:" not in report
+
+
+# -- Report with simulated scenarios -------------------------------------------
+
+
+class TestReportSimulatedScenarios:
+    """Tests for health reports with good, warning, and critical scenarios."""
+
+    def test_good_scenario_no_alerts(self) -> None:
+        """Good training: decreasing loss, no alerts, 'Training OK' summary."""
+        mon = TrendMonitor(window_size=20, warn_consecutive=3, critical_consecutive=5)
+        # Simulate healthy training: loss decreasing, metrics below thresholds
+        for i in range(20):
+            loss = 2.0 - i * 0.05
+            mon.check("train/loss", value=loss, threshold=9999.0)
+            mon.check("layer1/dead_neuron_ratio", value=0.1, threshold=0.5)
+            mon.check("layer1/gradient_norm", value=1.0, threshold=9999.0)
+        report = mon.report(step=200, loss=1.05)
+        assert "Training OK" in report
+        assert "INTERVENE" not in report
+        assert "Monitor" not in report
+        assert "↓" in report  # Loss trending down
+
+    def test_warning_scenario(self) -> None:
+        """Warning training: metric above threshold, slope positive."""
+        mon = TrendMonitor(window_size=20, warn_consecutive=2, critical_consecutive=20)
+        # Build up warning-level alerts
+        for i in range(10):
+            mon.check("layer1/dead_neuron_ratio", value=0.6 + i * 0.02, threshold=0.5)
+        report = mon.report(step=100, loss=1.0)
+        assert "Monitor" in report
+        assert "WARN" in report
+
+    def test_critical_scenario(self) -> None:
+        """Critical training: metric well above threshold with positive slope."""
+        mon = TrendMonitor(window_size=20, warn_consecutive=2, critical_consecutive=5)
+        # Build up critical alerts
+        for i in range(15):
+            mon.check(
+                "layer1/dead_neuron_ratio",
+                value=2.0 + i * 0.05,
+                threshold=0.5,
+                margin=0.1,
+            )
+        report = mon.report(step=100, loss=1.0)
+        assert "INTERVENE" in report
+        assert "CRITICAL" in report
+
+    def test_mixed_scenario_warn_and_critical(self) -> None:
+        """Mixed scenario: some metrics WARN, some CRITICAL."""
+        mon = TrendMonitor(window_size=20, warn_consecutive=2, critical_consecutive=5)
+        # metric_a escalates to CRITICAL
+        for i in range(15):
+            mon.check("metric_a", value=2.0 + i * 0.05, threshold=0.5, margin=0.1)
+        # metric_b only reaches WARN (shorter escalation)
+        for i in range(4):
+            mon.check("metric_b", value=1.0 + i * 0.1, threshold=0.5)
+        report = mon.report(step=100, loss=1.0)
+        # Summary should be INTERVENE (highest severity wins)
+        assert "INTERVENE" in report
+        # Both metrics should appear in report
+        assert "metric_a" in report
+        assert "metric_b" in report
+
+    def test_nan_loss_scenario(self) -> None:
+        """NaN loss triggers critical warning in report."""
+        mon = TrendMonitor()
+        report = mon.report(step=100, loss=float("nan"))
+        assert "NaN" in report
+        assert "CRITICAL" in report
+
+    def test_inf_loss_scenario(self) -> None:
+        """Inf loss triggers critical warning in report."""
+        mon = TrendMonitor()
+        report = mon.report(step=100, loss=float("inf"))
+        assert "Inf" in report or "inf" in report
+        assert "CRITICAL" in report
+
+    def test_correlation_alert_in_report(self) -> None:
+        """Report includes correlation alerts when triggered."""
+        mon = TrendMonitor(window_size=20)
+        # Build data for dying network correlation
+        dead_data = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        grad_data = [1.0, 0.8, 0.6, 0.4, 0.3, 0.2, 0.15, 0.1, 0.05]
+        for d, g in zip(dead_data, grad_data):
+            mon.check("fc2/dead_neuron_ratio", value=d, threshold=9999.0)
+            mon.check("fc2/gradient_norm", value=g, threshold=9999.0)
+        report = mon.report(step=100, loss=1.0)
+        # Should contain dying_network correlation alert
+        assert "dying_network" in report or "dying" in report.lower()
+
+
+# -- health_report_interval on Inspector ---------------------------------------
+
+
+class TestHealthReportInterval:
+    """Tests for health_report_interval kwarg on Inspector."""
+
+    def _make_inspector(self, health_report_interval: int = 500) -> Inspector:
+        """Create a minimal Inspector for testing."""
+        from torchinspector.inspector import Inspector
+
+        model = nn.Linear(2, 2)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        return Inspector(
+            model,
+            optimizer,
+            log_dir="/tmp/test_health_report",
+            health_report_interval=health_report_interval,
+        )
+
+    def test_health_report_interval_default(self) -> None:
+        """Default health_report_interval is 500."""
+        ins = self._make_inspector()
+        assert ins._health_report_interval == 500
+        ins.close()
+
+    def test_health_report_interval_custom(self) -> None:
+        """Custom health_report_interval is stored."""
+        ins = self._make_inspector(health_report_interval=250)
+        assert ins._health_report_interval == 250
+        ins.close()
+
+    @patch("torchinspector.monitor.TrendMonitor.print_report")
+    def test_step_triggers_report_at_interval(self, mock_print: MagicMock) -> None:
+        """step() calls monitor.print_report() at health_report_interval."""
+        ins = self._make_inspector(health_report_interval=10)
+        try:
+            for i in range(1, 25):
+                ins.step(loss=1.0)
+            # Should have been called at steps 10 and 20
+            assert mock_print.call_count == 2
+            mock_print.assert_any_call(10, 1.0)
+            mock_print.assert_any_call(20, 1.0)
+        finally:
+            ins.close()
+
+    @patch("torchinspector.monitor.TrendMonitor.print_report")
+    def test_step_no_report_between_intervals(self, mock_print: MagicMock) -> None:
+        """step() does not call monitor.print_report() between intervals."""
+        ins = self._make_inspector(health_report_interval=10)
+        try:
+            for i in range(1, 9):
+                ins.step(loss=1.0)
+            assert mock_print.call_count == 0
+        finally:
+            ins.close()
+
+    @patch("torchinspector.monitor.TrendMonitor.print_report")
+    def test_step_passes_loss_to_report(self, mock_print: MagicMock) -> None:
+        """step() passes loss value to monitor.print_report()."""
+        ins = self._make_inspector(health_report_interval=1)
+        try:
+            ins.step(loss=0.5)
+            mock_print.assert_called_once_with(1, 0.5)
+        finally:
+            ins.close()
+
+    @patch("torchinspector.monitor.TrendMonitor.print_report")
+    def test_step_no_loss_passes_none(self, mock_print: MagicMock) -> None:
+        """step() passes None when no loss kwarg provided."""
+        ins = self._make_inspector(health_report_interval=1)
+        try:
+            ins.step(accuracy=0.9)
+            mock_print.assert_called_once_with(1, None)
+        finally:
+            ins.close()
