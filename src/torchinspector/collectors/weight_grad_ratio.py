@@ -154,3 +154,39 @@ class WeightGradRatioCollector:
         max_ratio = max(ratios)
         self._backend.write_scalar(f"ratios/{name}/mean", mean_ratio, step)
         self._backend.write_scalar(f"ratios/{name}/max", max_ratio, step)
+
+    def collect(self, step: int) -> None:
+        """Collect and write W/G ratios if at log interval.
+
+        Registers backward hooks on newly watched modules, then iterates
+        watched modules to compute and log mean + max log-space ratios.
+
+        Args:
+            step: Global step counter.
+        """
+        if step % self._log_interval != 0:
+            return
+
+        watched = set(self._hook_manager._handles.keys())
+        if not watched:
+            return
+
+        self._ensure_hooks(watched)
+
+        for name, module in self._model.named_modules():
+            if name == "":
+                continue  # Skip root module
+            if name not in watched:
+                continue
+            self._collect_for_module(name, module, step)
+
+    def close(self) -> None:
+        """Remove all backward hooks and clear caches.
+
+        Idempotent — safe to call multiple times.
+        """
+        for handle in self._backward_handles:
+            handle.remove()
+        self._backward_handles.clear()
+        self._backward_hook_names.clear()
+        self._grad_norm_cache.clear()
