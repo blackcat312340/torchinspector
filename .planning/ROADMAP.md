@@ -30,15 +30,15 @@
 ### Phase 12: Weight/Gradient Ratio Monitoring
 
 **Requirements:** WGR-01, WGR-02, WGR-03, WGR-04
-**Status:** Pending
+**Status:** ✅ Complete (2026-06-15)
 
-- [ ] WGR-01: Per-layer weight-to-gradient ratio (TensorBoard scalar per layer)
-- [ ] WGR-02: Vanishing gradient (ratio > 1000) and exploding gradient (ratio < 0.001) detection -> WARN alert
-- [ ] WGR-03: Log-space ratio `log(||w||+eps) - log(||grad||+eps)` to avoid numerical overflow
-- [ ] WGR-04: Multi-scale window analysis (short 10, medium 50, long 200 steps) for progressive degradation
+- [x] WGR-01: Per-layer weight-to-gradient ratio (TensorBoard scalar per layer)
+- [x] WGR-02: Vanishing/exploding gradient detection via multi-scale trend analysis -> WARN/CRITICAL alerts
+- [x] WGR-03: Log-space ratio `log(||w||+eps) - log(||grad||+eps)` to avoid numerical overflow
+- [x] WGR-04: Multi-scale window analysis (short 10, medium 50, long 200 steps) for progressive degradation
 
 **New files:** `src/torchinspector/collectors/weight_grad_ratio.py`
-**Modified files:** `src/torchinspector/collectors/__init__.py`
+**Modified files:** `src/torchinspector/collectors/__init__.py`, `src/torchinspector/inspector.py`, `src/torchinspector/monitor.py`
 
 ### Phase 13: Learning Rate Scheduler Analysis
 
@@ -80,10 +80,10 @@
 | CVG-03 | 11 | Pending |
 | CVG-04 | 11 | Pending |
 | CVG-05 | 11 | Pending |
-| WGR-01 | 12 | Pending |
-| WGR-02 | 12 | Pending |
-| WGR-03 | 12 | Pending |
-| WGR-04 | 12 | Pending |
+| WGR-01 | 12 | ✅ Complete |
+| WGR-02 | 12 | ✅ Complete |
+| WGR-03 | 12 | ✅ Complete |
+| WGR-04 | 12 | ✅ Complete |
 | LR-01 | 13 | Pending |
 | LR-02 | 13 | Pending |
 | LR-03 | 13 | Pending |
@@ -92,8 +92,8 @@
 | BSZ-03 | 14 | Pending |
 | BSZ-04 | 14 | Pending |
 | BSZ-05 | 14 | Pending |
-| INT-01 | 11+13+14 | Pending |
-| INT-02 | 13+14 | Pending |
+| INT-01 | 11+12+13+14 | Partial (11+12) |
+| INT-02 | 12+13+14 | Partial (12) |
 | INT-03 | 14 | Pending |
 | INT-04 | 14 | Pending |
 
@@ -169,7 +169,7 @@ Phase 14 (Batch Sensitivity + Integration) -- requires all 3 prior phases
 | 9. PyPI Release | v1.1 | 0/2 | Skipped | — |
 | 10. Smart Monitoring | v1.2 | 4/4 | ✓ Complete | 2026-06-15 |
 | 11. Convergence Trajectory | v1.3 | 3/3 | Complete    | 2026-06-15 |
-| 12. Weight/Grad Ratio | v1.3 | 0 | Pending | — |
+| 12. Weight/Grad Ratio | v1.3 | 3/3 | ✅ Complete | 2026-06-15 |
 | 13. LR Scheduler Analysis | v1.3 | 0 | Pending | — |
 | 14. Batch Sensitivity + Integration | v1.3 | 0 | Pending | — |
 
