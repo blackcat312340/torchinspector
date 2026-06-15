@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import tempfile
 from unittest.mock import MagicMock
 
 import pytest
@@ -468,3 +469,267 @@ class TestEndToEnd:
         assert "ratios/fc1/max" in tags
 
         collector.close()
+
+
+class TestInspectorIntegration:
+    """Integration tests for WeightGradRatioCollector wired into Inspector."""
+
+    def _make_inspector(
+        self, log_interval: int = 10
+    ) -> tuple:
+        """Create a minimal Inspector with temp dir."""
+        from torchinspector.inspector import Inspector
+
+        model = nn.Sequential()
+        model.add_module("fc1", nn.Linear(8, 4))
+        model.add_module("fc2", nn.Linear(4, 2))
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        log_dir = tempfile.mkdtemp()
+        ins = Inspector(model, optimizer, log_dir=log_dir, log_interval=log_interval)
+        return ins, model, optimizer
+
+    def test_inspector_init_creates_wgr_collector(self) -> None:
+        """Inspector should initialize _weight_grad_ratio_collector."""
+        ins, _, _ = self._make_inspector()
+        assert hasattr(ins, "_weight_grad_ratio_collector")
+        assert isinstance(
+            ins._weight_grad_ratio_collector, WeightGradRatioCollector
+        )
+        ins.close()
+
+    def test_step_collects_wgr_at_interval(self) -> None:
+        """step() at log interval should trigger WGR collection."""
+        ins, model, optimizer = self._make_inspector()
+        ins.watch(["fc1"])
+
+        # Pre-register backward hooks so they fire from the first backward
+        watched = set(ins._hook_manager._handles.keys())
+        ins._weight_grad_ratio_collector._ensure_hooks(watched)
+
+        # Replace backend with mock to capture writes
+        backend = MagicMock(spec=TensorBoardBackend)
+        ins._weight_grad_ratio_collector._backend = backend
+
+        # Run 20 steps with backward passes
+        for step in range(1, 21):
+            x = torch.randn(2, 8, requires_grad=True)
+            loss = model(x).sum()
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            ins.step(loss=loss.item())
+
+        # Steps 10 and 20 should produce WGR scalars
+        wgr_tags = [
+            c.args[0]
+            for c in backend.write_scalar.call_args_list
+            if c.args[0].startswith("ratios/")
+        ]
+        assert len(wgr_tags) == 4  # 2 steps × 2 scalars (mean + max)
+
+        ins.close()
+
+    def test_step_feeds_monitor_check_wgr(self) -> None:
+        """step() should feed TrendMonitor.check_wgr() at interval."""
+        ins, model, optimizer = self._make_inspector()
+        ins.watch(["fc1"])
+
+        # Pre-register backward hooks
+        watched = set(ins._hook_manager._handles.keys())
+        ins._weight_grad_ratio_collector._ensure_hooks(watched)
+
+        # Replace monitor with mock
+        mock_monitor = MagicMock(spec=TrendMonitor)
+        mock_monitor.check_wgr.return_value = MagicMock()
+        ins._monitor = mock_monitor
+        ins._weight_grad_ratio_collector._monitor = mock_monitor
+
+        # Run 20 steps
+        for step in range(1, 21):
+            x = torch.randn(2, 8, requires_grad=True)
+            loss = model(x).sum()
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            ins.step(loss=loss.item())
+
+        # check_wgr should have been called at steps 10 and 20
+        assert mock_monitor.check_wgr.call_count == 2
+        call_args = mock_monitor.check_wgr.call_args_list
+        assert call_args[0].args[0] == "fc1"  # layer name
+        assert isinstance(call_args[0].args[1], float)  # log_ratio
+        assert call_args[0].args[2] == 10  # step
+
+        ins.close()
+
+    def test_close_removes_backward_hooks(self) -> None:
+        """close() should remove all backward hooks from WGR collector."""
+        ins, _, _ = self._make_inspector()
+        ins.watch(["fc1"])
+
+        # Trigger hook registration via collect
+        ins._weight_grad_ratio_collector.collect(10)
+        assert len(ins._weight_grad_ratio_collector._backward_handles) > 0
+
+        ins.close()
+        assert len(ins._weight_grad_ratio_collector._backward_handles) == 0
+        assert len(ins._weight_grad_ratio_collector._backward_hook_names) == 0
+
+    def test_context_manager_closes_cleanly(self) -> None:
+        """Context manager should close without error."""
+        from torchinspector.inspector import Inspector
+
+        model = nn.Sequential()
+        model.add_module("fc1", nn.Linear(8, 4))
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        log_dir = tempfile.mkdtemp()
+
+        with Inspector(model, optimizer, log_dir=log_dir, log_interval=10) as ins:
+            ins.watch(["fc1"])
+            x = torch.randn(2, 8, requires_grad=True)
+            loss = model(x).sum()
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            ins.step(loss=loss.item())
+
+
+class TestEndToEndIntegration:
+    """End-to-end tests with real Inspector and TensorBoard backend."""
+
+    def test_e2e_linear_model(self) -> None:
+        """Full training loop with nn.Linear → verify no errors."""
+        from torchinspector.inspector import Inspector
+
+        model = nn.Sequential(nn.Linear(8, 4), nn.Linear(4, 2))
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        log_dir = tempfile.mkdtemp()
+
+        with Inspector(model, optimizer, log_dir=log_dir, log_interval=10) as ins:
+            ins.watch(["0", "1"])
+
+            for step in range(1, 21):
+                x = torch.randn(2, 8, requires_grad=True)
+                loss = model(x).sum()
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                ins.step(loss=loss.item())
+
+    def test_e2e_multilayer_model(self) -> None:
+        """Model with 3 linear layers → 6 scalars (2 per layer)."""
+        from torchinspector.inspector import Inspector
+
+        model = nn.Sequential(nn.Linear(8, 8), nn.Linear(8, 4), nn.Linear(4, 2))
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        log_dir = tempfile.mkdtemp()
+
+        with Inspector(model, optimizer, log_dir=log_dir, log_interval=10) as ins:
+            ins.watch(["0", "1", "2"])
+
+            # Pre-register backward hooks
+            watched = set(ins._hook_manager._handles.keys())
+            ins._weight_grad_ratio_collector._ensure_hooks(watched)
+
+            # Replace backend with mock to count writes
+            backend = MagicMock(spec=TensorBoardBackend)
+            ins._weight_grad_ratio_collector._backend = backend
+
+            for step in range(1, 21):
+                x = torch.randn(2, 8, requires_grad=True)
+                loss = model(x).sum()
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                ins.step(loss=loss.item())
+
+        # Steps 10 and 20 × 3 layers × 2 scalars (mean + max) = 12
+        wgr_tags = [
+            c.args[0]
+            for c in backend.write_scalar.call_args_list
+            if c.args[0].startswith("ratios/")
+        ]
+        assert len(wgr_tags) == 12
+
+        tag_set = set(wgr_tags)
+        for layer in ("0", "1", "2"):
+            assert f"ratios/{layer}/mean" in tag_set
+            assert f"ratios/{layer}/max" in tag_set
+
+    def test_e2e_backward_before_step(self) -> None:
+        """Order B: backward → step → zero_grad → inspector.step."""
+        from torchinspector.inspector import Inspector
+
+        model = nn.Sequential(nn.Linear(8, 4))
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        log_dir = tempfile.mkdtemp()
+
+        with Inspector(model, optimizer, log_dir=log_dir, log_interval=10) as ins:
+            ins.watch(["0"])
+
+            # Pre-register backward hooks
+            watched = set(ins._hook_manager._handles.keys())
+            ins._weight_grad_ratio_collector._ensure_hooks(watched)
+
+            backend = MagicMock(spec=TensorBoardBackend)
+            ins._weight_grad_ratio_collector._backend = backend
+
+            for step in range(1, 21):
+                x = torch.randn(2, 8, requires_grad=True)
+                loss = model(x).sum()
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                ins.step(loss=loss.item())
+
+        wgr_tags = [
+            c.args[0]
+            for c in backend.write_scalar.call_args_list
+            if c.args[0].startswith("ratios/")
+        ]
+        assert len(wgr_tags) == 4  # 2 steps × 2 scalars
+
+    def test_e2e_frozen_layer(self) -> None:
+        """Frozen layer (requires_grad=False) → no ratio output for that layer."""
+        from torchinspector.inspector import Inspector
+
+        model = nn.Sequential(nn.Linear(8, 4), nn.Linear(4, 2))
+        # Freeze layer "0"
+        model[0].weight.requires_grad = False
+        model[0].bias.requires_grad = False
+
+        optimizer = torch.optim.SGD(
+            filter(lambda p: p.requires_grad, model.parameters()), lr=0.01
+        )
+        log_dir = tempfile.mkdtemp()
+
+        with Inspector(model, optimizer, log_dir=log_dir, log_interval=10) as ins:
+            ins.watch(["0", "1"])
+
+            # Pre-register backward hooks for unfrozen layer only
+            watched = set(ins._hook_manager._handles.keys())
+            ins._weight_grad_ratio_collector._ensure_hooks(watched)
+
+            backend = MagicMock(spec=TensorBoardBackend)
+            ins._weight_grad_ratio_collector._backend = backend
+
+            for step in range(1, 21):
+                x = torch.randn(2, 8, requires_grad=True)
+                loss = model(x).sum()
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                ins.step(loss=loss.item())
+
+        wgr_tags = [
+            c.args[0]
+            for c in backend.write_scalar.call_args_list
+            if c.args[0].startswith("ratios/")
+        ]
+        tag_set = set(wgr_tags)
+
+        # Frozen layer should have no ratio output (no grad → no hook cache)
+        assert not any("ratios/0/" in t for t in tag_set)
+        # Unfrozen layer should have output
+        assert "ratios/1/mean" in tag_set
+        assert "ratios/1/max" in tag_set
