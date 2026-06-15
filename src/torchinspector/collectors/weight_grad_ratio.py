@@ -120,3 +120,37 @@ class WeightGradRatioCollector:
             Log-space ratio.
         """
         return math.log(weight_norm + _EPS) - math.log(grad_norm + _EPS)
+
+    def _collect_for_module(
+        self, name: str, module: nn.Module, step: int
+    ) -> None:
+        """Collect and write W/G ratios for a single module.
+
+        Computes the log-space ratio for each direct parameter, then
+        writes mean and max aggregates to the backend.
+
+        Args:
+            name: Module name for tag construction.
+            module: The module to collect ratios for.
+            step: Global step counter.
+        """
+        ratios: list[float] = []
+        for _param_name, param in module.named_parameters(recurse=False):
+            if param.grad is None:
+                continue
+            w_norm = param.detach().float().norm(p=2).item()
+            g_norm = self._grad_norm_cache.get(name)
+            if g_norm is None:
+                continue
+            if w_norm < _EPS and g_norm < _EPS:
+                continue  # Both negligible — skip
+            ratio = self._compute_log_ratio(w_norm, g_norm)
+            ratios.append(ratio)
+
+        if not ratios:
+            return
+
+        mean_ratio = sum(ratios) / len(ratios)
+        max_ratio = max(ratios)
+        self._backend.write_scalar(f"ratios/{name}/mean", mean_ratio, step)
+        self._backend.write_scalar(f"ratios/{name}/max", max_ratio, step)
