@@ -20,6 +20,7 @@ from torchinspector.collectors.residual import ResidualCollector
 from torchinspector.collectors.rnn import RNNCollector
 from torchinspector.collectors.scalar import ScalarCollector
 from torchinspector.collectors.weight import WeightCollector
+from torchinspector.collectors.weight_grad_ratio import WeightGradRatioCollector
 from torchinspector.export import ONNXExporter
 from torchinspector.hooks import HookManager
 from torchinspector.monitor import TrendMonitor
@@ -187,6 +188,13 @@ class Inspector:
             self._backend,
             residual_interval=residual_interval,
         )
+        self._weight_grad_ratio_collector = WeightGradRatioCollector(
+            model,
+            self._hook_manager,
+            self._backend,
+            self._monitor,
+            log_interval=log_interval,
+        )
         self._onnx_exporter = ONNXExporter(model, self._log_dir)
 
     # -- Public API (10 methods) ------------------------------------------
@@ -213,6 +221,7 @@ class Inspector:
             self._param_collector.collect(self._step)
             self._activation_collector.collect(self._step)
             self._gradient_collector.collect(self._step)
+            self._weight_grad_ratio_collector.collect(self._step)
 
         self._feature_map_collector.collect(self._step)
         self._weight_collector.collect(self._step)
@@ -425,6 +434,7 @@ class Inspector:
         """
         if self._closed:
             return
+        self._weight_grad_ratio_collector.close()
         self._hook_manager.remove_all()
         self._backend.close()
         self._closed = True
