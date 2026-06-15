@@ -279,6 +279,13 @@ class TrendMonitor:
             if len(win) > size:
                 win.pop(0)
 
+        # Also maintain unsuffixed window for correlation_check lookups
+        base_key = f"ratios/{name}/mean"
+        base_win = self._windows[base_key]
+        base_win.append(log_ratio)
+        if len(base_win) > self._window_size:
+            base_win.pop(0)
+
         # Compute slopes for short and long windows
         short_key = f"ratios/{name}/mean:short"
         long_key = f"ratios/{name}/mean:long"
@@ -295,12 +302,9 @@ class TrendMonitor:
             elif short_slope < 0 and long_slope < 0:
                 # Both negative → exploding trend (gradient dominating weight)
                 self._alert_counts[alert_key] += 1
-            elif (short_slope > 0 and long_slope < 0) or (short_slope < 0 and long_slope > 0):
-                # Mixed signal → decay count by 1
-                self._alert_counts[alert_key] = max(0, self._alert_counts[alert_key] - 1)
             else:
-                # Both zero or one zero — no clear signal
-                pass
+                # Mixed signal or no clear trend → decay count by 1
+                self._alert_counts[alert_key] = max(0, self._alert_counts[alert_key] - 1)
         elif short_slope is not None:
             # Only short slope available — check direction
             if short_slope > 0 or short_slope < 0:
