@@ -59,6 +59,8 @@ class TrendMonitor:
         # Convergence trajectory state
         self._nan_steps: list[int] = []
         self._divergence_consecutive: int = 0
+        self._last_convergence_score: float | None = None
+        self._last_estimated_steps: int | None = None
 
     # -- Public API ---------------------------------------------------------
 
@@ -278,6 +280,81 @@ class TrendMonitor:
             flush=True,
         )
 
+    def convergence_score(self, current_loss: float) -> float:
+        """Compute a 0-100 convergence quality score.
+
+        Weighted composition:
+        - 50 % slope (direction)
+        - 30 % stability (short-vs-long agreement)
+        - 20 % noise (smoothness)
+
+        Args:
+            current_loss: Most recent loss value.
+
+        Returns:
+            Score from 0 (diverging) to 100 (converging smoothly).
+        """
+        slope = self._slope_score(current_loss)
+        stability = self._stability_score()
+        noise = self._noise_score()
+        score = 0.5 * slope + 0.3 * stability + 0.2 * noise
+        self._last_convergence_score = score
+        return score
+
+    def estimated_convergence_steps(self, current_loss: float) -> int | None:
+        """Estimate steps to convergence via linear extrapolation.
+
+        Extrapolates from current loss to the minimum loss observed in
+        the long window.  Returns ``None`` when insufficient data,
+        diverging, already at target, or projection exceeds 100 000 steps.
+
+        Args:
+            current_loss: Most recent loss value.
+
+        Returns:
+            Estimated steps, or ``None`` if unreliable.
+        """
+        long_win = self._windows.get("train/loss:long", [])
+        slope = self._compute_slope(long_win)
+        if slope is None or slope >= 0:
+            self._last_estimated_steps = None
+            return None
+        min_loss = min(long_win)
+        if current_loss <= min_loss:
+            self._last_estimated_steps = 0
+            return 0
+        steps = (current_loss - min_loss) / abs(slope)
+        if steps > 100_000:
+            self._last_estimated_steps = None
+            return None
+        self._last_estimated_steps = int(steps)
+        return self._last_estimated_steps
+
+    def convergence_trend(self) -> str:
+        """Return an arrow indicator for convergence direction.
+
+        Returns:
+            ``"down-arrow (accelerating)"`` — short slope more negative
+            than long slope by 20 %+.
+            ``"down-arrow"`` — both slopes negative.
+            ``"right-arrow"`` — stable / plateau.
+            ``"up-arrow"`` — both slopes positive (diverging).
+            ``"---"`` — insufficient data.
+        """
+        short_win = self._windows.get("train/loss:short", [])
+        long_win = self._windows.get("train/loss:long", [])
+        short_slope = self._compute_slope(short_win)
+        long_slope = self._compute_slope(long_win)
+        if short_slope is None or long_slope is None:
+            return "---"
+        if short_slope < 0 and long_slope < 0:
+            if long_slope != 0 and abs(short_slope) > abs(long_slope) * 1.2:
+                return "down-arrow (accelerating)"
+            return "down-arrow"
+        if short_slope > 0 and long_slope > 0:
+            return "up-arrow"
+        return "right-arrow"
+
     # -- Private helpers ----------------------------------------------------
 
     @staticmethod
@@ -326,7 +403,7 @@ class TrendMonitor:
         if len(short_win) < _SHORT_WINDOW:
             return AlertLevel.OK
 
-        # Count consecutive rises from end of window
+        # Count consecutive rising pairs from end of window
         consecutive_rises = 0
         for i in range(len(short_win) - 1, 0, -1):
             if short_win[i] > short_win[i - 1]:
@@ -336,7 +413,7 @@ class TrendMonitor:
 
         slope = self._compute_slope(short_win)
 
-        if consecutive_rises >= 10 and slope is not None and slope > 0:
+        if consecutive_rises >= 9 and slope is not None and slope > 0:
             self._divergence_consecutive += 1
             if self._divergence_consecutive >= 2:
                 self._current_alerts["convergence"] = AlertLevel.CRITICAL
@@ -348,3 +425,58 @@ class TrendMonitor:
             self._divergence_consecutive = 0
             self._current_alerts.pop("convergence", None)
             return AlertLevel.OK
+
+    def _slope_score(self, current_loss: float) -> float:
+        """Compute 0-100 score based on long-window slope.
+
+        Uses sigmoid mapping: ``100 / (1 + exp(200 * normalized_slope))``
+        where ``normalized_slope = slope / current_loss``.  This makes
+        the score scale-invariant.
+
+        Returns 50.0 (neutral) when insufficient data or current_loss is zero.
+        """
+        long_win = self._windows.get("train/loss:long", [])
+        slope = self._compute_slope(long_win)
+        if slope is None or current_loss == 0:
+            return 50.0
+        normalized_slope = slope / current_loss
+        return 100.0 / (1.0 + math.exp(200.0 * normalized_slope))
+
+    def _stability_score(self) -> float:
+        """Compute 0-100 score based on short-vs-long slope agreement.
+
+        Both converging (negative) = 50-100.
+        Signs disagree = 0-50.
+        Both diverging (positive) = 0-20.
+        """
+        short_win = self._windows.get("train/loss:short", [])
+        long_win = self._windows.get("train/loss:long", [])
+        short_slope = self._compute_slope(short_win)
+        long_slope = self._compute_slope(long_win)
+        if short_slope is None or long_slope is None:
+            return 50.0
+        if short_slope < 0 and long_slope < 0:
+            # Both converging — score by agreement
+            max_abs = max(abs(short_slope), abs(long_slope), 1e-10)
+            agreement = 1.0 - abs(short_slope - long_slope) / max_abs
+            return 50.0 + 50.0 * max(0.0, agreement)
+        if short_slope > 0 and long_slope > 0:
+            # Both diverging
+            return max(0.0, 20.0 - abs(short_slope - long_slope) * 100.0)
+        # Signs disagree
+        return 25.0
+
+    def _noise_score(self) -> float:
+        """Compute 0-100 score based on coefficient of variation in medium window.
+
+        Uses ``100 * exp(-5 * CV)``.  Returns 50.0 when < 5 data points.
+        """
+        medium_win = self._windows.get("train/loss:medium", [])
+        if len(medium_win) < 5:
+            return 50.0
+        mean_val = float(np.mean(medium_win))
+        std_val = float(np.std(medium_win))
+        if abs(mean_val) < 1e-10:
+            return 100.0
+        cv = std_val / abs(mean_val)
+        return 100.0 * math.exp(-5.0 * cv)
