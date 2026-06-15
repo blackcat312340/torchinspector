@@ -830,3 +830,159 @@ class TestDivergenceDetection:
         level = mon.check_convergence(10.0, step=10)
         assert level == AlertLevel.CRITICAL
         assert mon._divergence_consecutive == 2
+
+
+# -- Convergence score ---------------------------------------------------------
+
+
+class TestConvergenceScore:
+    """Tests for TrendMonitor.convergence_score() — weighted 0-100 score."""
+
+    def test_score_returns_float_0_to_100(self) -> None:
+        """convergence_score returns a float in [0, 100]."""
+        mon = TrendMonitor()
+        for i in range(30):
+            mon.check_convergence(2.0 - i * 0.01, step=i)
+        score = mon.convergence_score(current_loss=1.7)
+        assert isinstance(score, float)
+        assert 0.0 <= score <= 100.0
+
+    def test_score_neutral_when_insufficient_data(self) -> None:
+        """Fresh monitor with no data returns ~50 (neutral)."""
+        mon = TrendMonitor()
+        score = mon.convergence_score(current_loss=1.0)
+        # All three sub-scores default to 50.0 when insufficient
+        # 0.5*50 + 0.3*50 + 0.2*50 = 50.0
+        assert abs(score - 50.0) < 1e-6
+
+    def test_score_high_for_fast_convergence(self) -> None:
+        """Steadily decreasing loss yields score > 70."""
+        mon = TrendMonitor()
+        # Feed 250 steps of decreasing loss to fill all windows
+        for i in range(250):
+            mon.check_convergence(5.0 - i * 0.01, step=i)
+        score = mon.convergence_score(current_loss=2.5)
+        assert score > 70.0
+
+    def test_score_low_for_divergence(self) -> None:
+        """Steadily increasing loss yields score < 50 (below neutral)."""
+        mon = TrendMonitor()
+        for i in range(250):
+            mon.check_convergence(0.5 + i * 0.01, step=i)
+        score = mon.convergence_score(current_loss=3.0)
+        assert score < 50.0
+
+    def test_score_components_have_correct_weights(self) -> None:
+        """Score equals 0.5*slope + 0.3*stability + 0.2*noise."""
+        mon = TrendMonitor()
+        for i in range(60):
+            mon.check_convergence(3.0 - i * 0.005, step=i)
+        current_loss = 2.7
+        slope_s = mon._slope_score(current_loss)
+        stab_s = mon._stability_score()
+        noise_s = mon._noise_score()
+        expected = 0.5 * slope_s + 0.3 * stab_s + 0.2 * noise_s
+        actual = mon.convergence_score(current_loss)
+        assert abs(actual - expected) < 1e-10
+
+
+# -- Estimated convergence steps ----------------------------------------------
+
+
+class TestEstimatedSteps:
+    """Tests for TrendMonitor.estimated_convergence_steps()."""
+
+    def test_returns_none_when_insufficient_data(self) -> None:
+        """Fresh monitor returns None."""
+        mon = TrendMonitor()
+        assert mon.estimated_convergence_steps(current_loss=1.0) is None
+
+    def test_returns_none_when_diverging(self) -> None:
+        """Rising loss (positive slope) returns None."""
+        mon = TrendMonitor()
+        for i in range(250):
+            mon.check_convergence(0.5 + i * 0.01, step=i)
+        assert mon.estimated_convergence_steps(current_loss=3.0) is None
+
+    def test_returns_int_for_converging(self) -> None:
+        """Decreasing loss returns a positive int."""
+        mon = TrendMonitor()
+        for i in range(250):
+            mon.check_convergence(5.0 - i * 0.02, step=i)
+        result = mon.estimated_convergence_steps(current_loss=3.0)
+        assert result is not None
+        assert isinstance(result, int)
+        assert result > 0
+
+    def test_returns_none_for_large_projection(self) -> None:
+        """Very slow convergence (> 100K steps) returns None."""
+        mon = TrendMonitor()
+        # Barely decreasing: slope ≈ -0.00001
+        for i in range(250):
+            mon.check_convergence(10.0 - i * 0.00001, step=i)
+        # To exceed 100K: distance / |slope| > 100K
+        # |slope| ≈ 0.00001 → distance must be > 1.0
+        # current_loss much larger than window min → large distance
+        result = mon.estimated_convergence_steps(current_loss=15.0)
+        assert result is None
+
+    def test_returns_zero_when_already_at_target(self) -> None:
+        """Loss at window minimum returns 0."""
+        mon = TrendMonitor()
+        # Feed decreasing then flat — minimum is last value
+        for i in range(200):
+            mon.check_convergence(5.0 - i * 0.02, step=i)
+        # current_loss == min(long_window) == 5.0 - 199*0.02 = 1.02
+        result = mon.estimated_convergence_steps(current_loss=1.02)
+        assert result == 0
+
+
+# -- Convergence trend ---------------------------------------------------------
+
+
+class TestConvergenceTrend:
+    """Tests for TrendMonitor.convergence_trend() — arrow indicators."""
+
+    def test_insufficient_data_returns_dash(self) -> None:
+        """Fresh monitor returns '---'."""
+        mon = TrendMonitor()
+        assert mon.convergence_trend() == "---"
+
+    def test_both_slopes_negative_returns_down_arrow(self) -> None:
+        """Both short and long slopes negative returns 'down-arrow'."""
+        mon = TrendMonitor()
+        # Gentle decrease — short slope won't exceed 1.2x long slope
+        for i in range(250):
+            mon.check_convergence(5.0 - i * 0.01, step=i)
+        trend = mon.convergence_trend()
+        assert trend in ("down-arrow", "down-arrow (accelerating)")
+
+    def test_accelerating_returns_down_arrow_accelerating(self) -> None:
+        """Short slope more negative than long by 20%+ returns accelerating."""
+        mon = TrendMonitor()
+        # Long window: slow steady decrease
+        for i in range(200):
+            mon.check_convergence(5.0 - i * 0.005, step=i)
+        # Short window: fast recent decrease
+        for i in range(10):
+            mon.check_convergence(4.0 - i * 0.5, step=200 + i)
+        trend = mon.convergence_trend()
+        assert trend == "down-arrow (accelerating)"
+
+    def test_both_slopes_positive_returns_up_arrow(self) -> None:
+        """Both slopes positive returns 'up-arrow'."""
+        mon = TrendMonitor()
+        for i in range(250):
+            mon.check_convergence(0.5 + i * 0.01, step=i)
+        assert mon.convergence_trend() == "up-arrow"
+
+    def test_mixed_returns_right_arrow(self) -> None:
+        """Mixed signs (one positive, one negative) returns 'right-arrow'."""
+        mon = TrendMonitor()
+        # Long window: decreasing
+        for i in range(200):
+            mon.check_convergence(5.0 - i * 0.01, step=i)
+        # Short window: increasing (reversal)
+        for i in range(10):
+            mon.check_convergence(3.0 + i * 0.1, step=200 + i)
+        assert mon.convergence_trend() == "right-arrow"
