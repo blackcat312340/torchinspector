@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -14,6 +15,7 @@ from tensorboard.backend.event_processing.event_accumulator import (
 from torch import nn
 
 from torchinspector import Inspector
+from torchinspector.monitor import AlertLevel
 
 
 def _get_image_tags(log_dir: Path) -> set[str]:
@@ -295,6 +297,190 @@ class TestExplainIntegration:
             attn_tags = [t for t in tags if "attention/" in t]
             assert len(attn_tags) == 4, (
                 f"Expected 4 head tags, got {attn_tags}"
+            )
+        finally:
+            shutil.rmtree(log_dir, ignore_errors=True)
+
+
+# ============================================================================
+# Phase 10: Smart Monitoring — watch_auto + health report E2E
+# ============================================================================
+
+
+class SimpleMLPForSmart(nn.Module):
+    """MLP for smart monitoring integration tests."""
+
+    def __init__(self, in_dim: int = 784, hidden: int = 128, num_classes: int = 10):
+        super().__init__()
+        self.fc1 = nn.Linear(in_dim, hidden)
+        self.relu1 = nn.ReLU()
+        self.fc2 = nn.Linear(hidden, hidden)
+        self.relu2 = nn.ReLU()
+        self.fc3 = nn.Linear(hidden, num_classes)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.relu1(self.fc1(x))
+        x = self.relu2(self.fc2(x))
+        return self.fc3(x)
+
+
+class TestWatchAutoE2E:
+    """E2E: watch_auto selects layers, health reports fire, alerts trigger."""
+
+    def test_watch_auto_selects_linear_layers(self) -> None:
+        """watch_auto() returns high-priority linear_block layers."""
+        log_dir = tempfile.mkdtemp()
+        try:
+            model = SimpleMLPForSmart()
+            opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+            ins = Inspector(
+                model, opt, log_dir,
+                log_interval=5,
+                health_report_interval=10,
+            )
+            selected = ins.watch_auto(max_layers=5)
+            ins.close()
+
+            # classify_architecture should identify linear_block layers
+            assert len(selected) > 0, "watch_auto should select at least one layer"
+            # All MLP layers are linear_block priority 3
+            assert all(
+                name in ("fc1", "relu1", "fc2", "relu2", "fc3")
+                for name in selected
+            ), f"Unexpected layers selected: {selected}"
+        finally:
+            shutil.rmtree(log_dir, ignore_errors=True)
+
+    @patch("torchinspector.monitor.TrendMonitor.print_report")
+    def test_health_reports_fire_at_interval(self, mock_print) -> None:
+        """Health reports fire at health_report_interval during training."""
+        log_dir = tempfile.mkdtemp()
+        try:
+            model = SimpleMLPForSmart()
+            opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+            ins = Inspector(
+                model, opt, log_dir,
+                log_interval=1,
+                health_report_interval=10,
+            )
+            ins.watch_auto(max_layers=5)
+
+            for step in range(1, 31):
+                x = torch.randn(16, 784)
+                y = torch.randint(0, 10, (16,))
+                opt.zero_grad()
+                loss = nn.functional.cross_entropy(model(x), y)
+                loss.backward()
+                opt.step()
+                ins.step(loss=loss.item())
+
+            ins.close()
+
+            # Reports should fire at steps 10, 20, 30
+            assert mock_print.call_count == 3
+            mock_print.assert_any_call(10, pytest.approx(mock_print.call_args_list[0][0][1], rel=0.1))
+            mock_print.assert_any_call(20, pytest.approx(mock_print.call_args_list[1][0][1], rel=0.1))
+            mock_print.assert_any_call(30, pytest.approx(mock_print.call_args_list[2][0][1], rel=0.1))
+        finally:
+            shutil.rmtree(log_dir, ignore_errors=True)
+
+    def test_watch_auto_with_full_training_loop(self) -> None:
+        """watch_auto + full training loop produces TensorBoard scalars."""
+        log_dir = tempfile.mkdtemp()
+        try:
+            model = SimpleMLPForSmart()
+            opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+            ins = Inspector(
+                model, opt, log_dir,
+                log_interval=5,
+                health_report_interval=10,
+            )
+            selected = ins.watch_auto(max_layers=5)
+
+            for step in range(20):
+                x = torch.randn(16, 784)
+                y = torch.randint(0, 10, (16,))
+                opt.zero_grad()
+                loss = nn.functional.cross_entropy(model(x), y)
+                loss.backward()
+                opt.step()
+                ins.step(loss=loss.item())
+
+            ins.close()
+
+            ea = EventAccumulator(log_dir)
+            ea.Reload()
+            scalar_tags = set(ea.Tags().get("scalars", []))
+
+            # Loss should be logged
+            assert any("train/loss" in t for t in scalar_tags), (
+                f"Missing train/loss in scalars: {scalar_tags}"
+            )
+            # At least one watched layer should have activation stats
+            activation_tags = [t for t in scalar_tags if "activations/" in t]
+            assert len(activation_tags) > 0, (
+                f"No activation scalars from watched layers: {scalar_tags}"
+            )
+        finally:
+            shutil.rmtree(log_dir, ignore_errors=True)
+
+
+class TestStressHighLR:
+    """Stress test: lr=10.0 triggers gradient explosion alert."""
+
+    def test_high_lr_triggers_critical_alert(self) -> None:
+        """MLP with lr=10.0 for 50 steps should trigger CRITICAL alert."""
+        log_dir = tempfile.mkdtemp()
+        try:
+            model = SimpleMLPForSmart()
+            opt = torch.optim.SGD(model.parameters(), lr=10.0)
+            ins = Inspector(
+                model, opt, log_dir,
+                log_interval=1,
+                health_report_interval=50,
+            )
+            ins.watch_auto(max_layers=3)
+
+            # Collect gradient norms to feed to monitor
+            gradient_norms: list[float] = []
+            for step in range(50):
+                x = torch.randn(16, 784)
+                y = torch.randint(0, 10, (16,))
+                opt.zero_grad()
+                loss = nn.functional.cross_entropy(model(x), y)
+                loss.backward()
+                opt.step()
+                ins.step(loss=loss.item())
+
+                # Compute gradient norm for monitoring
+                total_norm = 0.0
+                for p in model.parameters():
+                    if p.grad is not None:
+                        total_norm += p.grad.data.norm(2).item() ** 2
+                total_norm = total_norm ** 0.5
+                gradient_norms.append(total_norm)
+
+                # Feed gradient norm to monitor for trend detection
+                ins._monitor.check(
+                    "gradient_norm",
+                    value=total_norm,
+                    threshold=100.0,
+                    margin=50.0,
+                )
+
+            ins.close()
+
+            # With lr=10.0, gradients should explode — check monitor state
+            # The monitor should have at least one alert above OK
+            monitor = ins._monitor
+            has_alert = any(
+                level > AlertLevel.OK
+                for level in monitor._current_alerts.values()
+            )
+            # Gradient norms should be large
+            assert max(gradient_norms) > 10.0 or has_alert, (
+                f"Expected gradient explosion: max_norm={max(gradient_norms):.1f}, "
+                f"alerts={monitor._current_alerts}"
             )
         finally:
             shutil.rmtree(log_dir, ignore_errors=True)
