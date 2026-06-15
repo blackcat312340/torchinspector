@@ -45,15 +45,31 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| LR-01..03 | TBD | Pending |
-| WGR-01..04 | TBD | Pending |
-| CVG-01..05 | TBD | Pending |
-| BSZ-01..05 | TBD | Pending |
-| INT-01..04 | TBD | Pending |
+| CVG-01 | 11 | Pending |
+| CVG-02 | 11 | Pending |
+| CVG-03 | 11 | Pending |
+| CVG-04 | 11 | Pending |
+| CVG-05 | 11 | Pending |
+| WGR-01 | 12 | Pending |
+| WGR-02 | 12 | Pending |
+| WGR-03 | 12 | Pending |
+| WGR-04 | 12 | Pending |
+| LR-01 | 13 | Pending |
+| LR-02 | 13 | Pending |
+| LR-03 | 13 | Pending |
+| BSZ-01 | 14 | Pending |
+| BSZ-02 | 14 | Pending |
+| BSZ-03 | 14 | Pending |
+| BSZ-04 | 14 | Pending |
+| BSZ-05 | 14 | Pending |
+| INT-01 | 11 (partial) + 13 (partial) + 14 (completion) | Pending |
+| INT-02 | 13 (partial) + 14 (completion) | Pending |
+| INT-03 | 14 | Pending |
+| INT-04 | 14 | Pending |
 
 **Coverage:**
 - v1.3 requirements: 21 total
-- Mapped to phases: TBD
+- Mapped to phases: 21/21
 - Unmapped: 0 ✓
 
 ---
