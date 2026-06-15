@@ -241,6 +241,22 @@ class TrendMonitor:
             if math.isnan(loss) or math.isinf(loss):
                 lines.append("  CRITICAL NaN/Inf loss detected!")
 
+        # Convergence section
+        if loss is not None and math.isfinite(loss):
+            score = self.convergence_score(loss)
+            conv_trend = self.convergence_trend()
+            est_steps = self.estimated_convergence_steps(loss)
+            lines.append(f"  Convergence: score={score:.0f}/100 {conv_trend}")
+            if est_steps is not None:
+                lines.append(f"  Est. convergence: ~{est_steps} steps")
+            if score < 30:
+                lines.append("  WARNING: Low convergence score — training may not be converging")
+        # NaN history
+        if self._nan_steps:
+            recent = self._nan_steps[-5:]
+            steps_str = ", ".join(str(s) for s in recent)
+            lines.append(f"  NaN loss at steps: {steps_str}")
+
         # Active alerts
         active = [(n, alvl) for n, alvl in self._current_alerts.items() if alvl >= AlertLevel.WARN]
         if active:
