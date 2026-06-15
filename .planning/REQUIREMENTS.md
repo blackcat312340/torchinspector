@@ -20,11 +20,11 @@
 
 ### 收敛轨迹分析（CVG）
 
-- [ ] **CVG-01**: 用户可以查看 loss 趋势线（线性回归拟合，TensorBoard scalar）
-- [ ] **CVG-02**: 用户可以查看收敛速度评估（斜率、预计收敛步数）
-- [ ] **CVG-03**: 支持多尺度滑动窗口（短期/中期/长期）区分噪声和真实趋势
-- [ ] **CVG-04**: 系统检测发散（loss 连续上升 + 加速）并通过 TrendMonitor 发出 CRITICAL 告警
-- [ ] **CVG-05**: 使用相对阈值（`loss > 2x min_seen`）而非绝对阈值，适应不同任务的 loss 尺度
+- [x] **CVG-01**: 用户可以查看 loss 趋势线（线性回归拟合，TensorBoard scalar）
+- [x] **CVG-02**: 用户可以查看收敛速度评估（斜率、预计收敛步数）
+- [x] **CVG-03**: 支持多尺度滑动窗口（短期/中期/长期）区分噪声和真实趋势
+- [x] **CVG-04**: 系统检测发散（loss 连续上升 + 加速）并通过 TrendMonitor 发出 CRITICAL 告警
+- [x] **CVG-05**: 使用相对阈值（`loss > 2x min_seen`）而非绝对阈值，适应不同任务的 loss 尺度
 
 ### 批量大小敏感度（BSZ）
 
@@ -36,7 +36,7 @@
 
 ### 跨指标集成
 
-- [ ] **INT-01**: 所有 4 个指标的告警通过 TrendMonitor 统一管理（INFO/WARN/CRITICAL 升级）
+- [x] **INT-01**: 所有 4 个指标的告警通过 TrendMonitor 统一管理（INFO/WARN/CRITICAL 升级）
 - [ ] **INT-02**: 新增相关性规则：lr 突变 + loss 停滞 → WARN；权重/梯度极端 + 收敛缓慢 → CRITICAL
 - [ ] **INT-03**: 性能开销 <5%（默认设置下预估 ~2.5%）
 - [ ] **INT-04**: 所有新功能与 torch.compile 兼容（best-effort，有已知限制时文档说明）
@@ -45,11 +45,11 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CVG-01 | 11 | Pending |
-| CVG-02 | 11 | Pending |
-| CVG-03 | 11 | Pending |
-| CVG-04 | 11 | Pending |
-| CVG-05 | 11 | Pending |
+| CVG-01 | 11 | Complete |
+| CVG-02 | 11 | Complete |
+| CVG-03 | 11 | Complete |
+| CVG-04 | 11 | Complete |
+| CVG-05 | 11 | Complete |
 | WGR-01 | 12 | Pending |
 | WGR-02 | 12 | Pending |
 | WGR-03 | 12 | Pending |
@@ -62,7 +62,7 @@
 | BSZ-03 | 14 | Pending |
 | BSZ-04 | 14 | Pending |
 | BSZ-05 | 14 | Pending |
-| INT-01 | 11 (partial) + 13 (partial) + 14 (completion) | Pending |
+| INT-01 | 11 (partial) + 13 (partial) + 14 (completion) | Complete |
 | INT-02 | 13 (partial) + 14 (completion) | Pending |
 | INT-03 | 14 | Pending |
 | INT-04 | 14 | Pending |
