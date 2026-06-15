@@ -548,10 +548,18 @@ class TestInspectorConvergenceIntegration:
             ins.close()
 
             scalar_tags = _get_scalar_tags(Path(log_dir))
-            assert "convergence/score" in scalar_tags, f"Missing convergence/score. Found: {scalar_tags}"
-            assert "convergence/slope:short" in scalar_tags, f"Missing slope:short. Found: {scalar_tags}"
-            assert "convergence/slope:medium" in scalar_tags, f"Missing slope:medium. Found: {scalar_tags}"
-            assert "convergence/slope:long" in scalar_tags, f"Missing slope:long. Found: {scalar_tags}"
+            assert "convergence/score" in scalar_tags, (
+                f"Missing convergence/score. Found: {scalar_tags}"
+            )
+            assert "convergence/slope:short" in scalar_tags, (
+                f"Missing slope:short. Found: {scalar_tags}"
+            )
+            assert "convergence/slope:medium" in scalar_tags, (
+                f"Missing slope:medium. Found: {scalar_tags}"
+            )
+            assert "convergence/slope:long" in scalar_tags, (
+                f"Missing slope:long. Found: {scalar_tags}"
+            )
         finally:
             shutil.rmtree(log_dir, ignore_errors=True)
 
