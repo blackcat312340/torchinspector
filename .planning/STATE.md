@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: 通用监控增强
-status: complete
-last_updated: "2026-06-15T16:00:00.000Z"
+status: milestone_complete
+last_updated: "2026-06-15T17:00:00.000Z"
 last_activity: 2026-06-15
 progress:
   total_phases: 4
   completed_phases: 4
-  total_plans: 3
-  completed_plans: 15
+  total_plans: 11
+  completed_plans: 11
   percent: 100
+milestone_archived: true
 ---
 
 # State: TorchInspector

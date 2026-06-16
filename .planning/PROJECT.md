@@ -20,23 +20,31 @@ Make the internal state of PyTorch training loops observable through a clean, mi
 - ✓ ECOS-01..02: Lightning/HuggingFace integration — v1.0 (Phase 5)
 - ✓ UNIV-01..06: Universal layer observability — v1.0 (Phase 6)
 - ✓ SMART-01..03: Auto detection, trend alerting, health reports — v1.2 (Phase 10)
+- ✓ CVG-01..05: Convergence trajectory analysis — v1.3 (Phase 11)
+- ✓ WGR-01..04: Weight/gradient ratio monitoring — v1.3 (Phase 12)
+- ✓ LR-01..03: Learning rate scheduler analysis — v1.3 (Phase 13)
+- ✓ BSZ-01..05: Batch sensitivity analysis — v1.3 (Phase 14)
+- ✓ INT-01..04: Cross-metric integration — v1.3 (Phases 11-14)
 
 ### Active
 
-- [ ] **METRIC-01**: 学习率调度器效果分析 — 记录 lr 变化曲线、检测异常调度
-- [ ] **METRIC-02**: 权重/梯度比率监控 — 逐层 weight-to-gradient ratio，细粒度 vanishing/exploding 检测
-- [ ] **METRIC-03**: 收敛轨迹分析 — loss 趋势预测、收敛速度评估、发散预警
-- [ ] **METRIC-04**: 批量大小敏感度 — 不同 batch size 下的梯度方差、训练稳定性对比
+(No active requirements — v1.3 complete, planning next milestone)
 
-## Current Milestone: v1.3 通用监控增强
+## Current State
 
-**Goal:** 补全所有网络类型通用的监控指标，让训练可观测性更完整
+**Shipped:** v1.3 通用监控增强 (2026-06-15)
+**Phases:** 14 total (4 in v1.3)
+**Plans:** 46 total (11 in v1.3)
+**Tests:** 357 passing
+**Source LOC:** 4,432
 
-**Target features:**
-- 学习率调度器效果分析
-- 权重/梯度比率监控
-- 收敛轨迹分析
-- 批量大小敏感度分析
+**v1.3 delivered:**
+- Convergence trajectory analysis (loss trend, speed, divergence detection)
+- Weight/gradient ratio monitoring (per-layer W/G, vanishing/exploding detection)
+- Learning rate scheduler analysis (LR anomaly detection, lr-loss correlation)
+- Batch sensitivity + full integration (GNS, micro-batch variance, all 4 metrics through TrendMonitor)
+
+**Architecture:** 4 new collectors (convergence.py, weight_grad_ratio.py, lr_scheduler.py, batch_sensitivity.py), TrendMonitor expanded with 4 check methods and 6 correlation rules.
 
 ### Out of Scope
 
@@ -47,9 +55,10 @@ Make the internal state of PyTorch training loops observable through a clean, mi
 
 ## Context
 
-Shipped v1.2 with 8,203 LOC Python across 10 phases (35 plans, 211 tests).
+Shipped v1.3 with 4,432 LOC Python across 14 phases (46 plans, 357 tests).
 Tech stack: PyTorch 2.0+, TensorBoard, Captum, Poetry packaging.
-Architecture: src layout with Inspector facade, HookManager, collectors, TrendMonitor.
+Architecture: src layout with Inspector facade, HookManager, 12 collectors, TrendMonitor with 4 check methods and 6 correlation rules.
+v1.3 added 4 new collectors: convergence.py, weight_grad_ratio.py, lr_scheduler.py, batch_sensitivity.py.
 
 ## Key Decisions
 
@@ -62,10 +71,16 @@ Architecture: src layout with Inspector facade, HookManager, collectors, TrendMo
 | Vertical MVP mode | Each phase delivers end-to-end | ✓ Good |
 | Interval-based collection | <5% overhead at default settings | ✓ Good |
 | Overwrite pattern for hooks | No memory leak from activation cache | ✓ Good |
+| v1.3 order: CVG→WGR→LR→BSZ | Build foundation first | ✓ Good |
+| Each metric gets own collector | Phase 12 pattern, clean separation | ✓ Good |
+| TrendMonitor as unified alert hub | Multi-scale windows, correlation rules | ✓ Good |
+| Log-space ratios for numerical stability | Avoid division by zero and overflow | ✓ Good |
+| Backward hook gradient caching | Capture gradients before zero_grad | ✓ Good |
+| Trend-based detection (not fixed) | Consistent with Phase 11-14 patterns | ✓ Good |
 
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-06-15 after v1.2 milestone*
+*Last updated: 2026-06-15 after v1.3 milestone*

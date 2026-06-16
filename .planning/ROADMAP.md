@@ -5,137 +5,26 @@
 - ✅ **v1.3 通用监控增强** — Phases 11-14 (shipped 2026-06-15)
 - ✅ **v1.2 Smart Monitoring** — Phases 1-10 (shipped 2026-06-15)
 
-## v1.3 Phase Plan
-
-**Goal:** 补全所有网络类型通用的监控指标，让训练可观测性更完整
-**Requirements:** 21 total (LR-01..03, WGR-01..04, CVG-01..05, BSZ-01..05, INT-01..04)
-**Implementation order:** METRIC-03 (收敛) -> METRIC-02 (权重/梯度) -> METRIC-01 (LR) -> METRIC-04 (批量)
-**Architecture:** 3 new collectors + 1 modification, backend unchanged
-
-### Phase 11: Convergence Trajectory Analysis
-
-**Requirements:** CVG-01, CVG-02, CVG-03, CVG-04, CVG-05, INT-01 (partial)
-**Status:** Pending
-
-- [ ] CVG-01: Loss trend line (linear regression fit, TensorBoard scalar)
-- [ ] CVG-02: Convergence speed assessment (slope, estimated convergence steps)
-- [ ] CVG-03: Multi-scale sliding windows (short 10 / medium 50 / long 200 steps)
-- [ ] CVG-04: Divergence detection (loss continuously rising + accelerating) -> CRITICAL alert
-- [ ] CVG-05: Relative thresholds (`loss > 2x min_seen`) instead of absolute
-- [ ] INT-01 (partial): TrendMonitor integration for convergence alerts
-
-**New files:** `src/torchinspector/collectors/convergence.py`
-**Modified files:** `src/torchinspector/monitor.py` (enhance TrendMonitor)
-
-### Phase 12: Weight/Gradient Ratio Monitoring
-
-**Requirements:** WGR-01, WGR-02, WGR-03, WGR-04
-**Status:** ✅ Complete (2026-06-15)
-
-- [x] WGR-01: Per-layer weight-to-gradient ratio (TensorBoard scalar per layer)
-- [x] WGR-02: Vanishing/exploding gradient detection via multi-scale trend analysis -> WARN/CRITICAL alerts
-- [x] WGR-03: Log-space ratio `log(||w||+eps) - log(||grad||+eps)` to avoid numerical overflow
-- [x] WGR-04: Multi-scale window analysis (short 10, medium 50, long 200 steps) for progressive degradation
-
-**New files:** `src/torchinspector/collectors/weight_grad_ratio.py`
-**Modified files:** `src/torchinspector/collectors/__init__.py`, `src/torchinspector/inspector.py`, `src/torchinspector/monitor.py`
-
-### Phase 13: Learning Rate Scheduler Analysis
-
-**Requirements:** LR-01, LR-02, LR-03, INT-01 (partial), INT-02 (partial)
-**Status:** ✅ Complete (2026-06-15)
-
-- [x] LR-01: Learning rate change curve (TensorBoard scalar)
-- [x] LR-02: Anomalous scheduling detection (sudden jump >10x, decay too fast <0.01x) -> WARN alert
-- [x] LR-03: lr-loss correlation analysis (50-step loss response window after anomaly)
-- [x] INT-01 (partial): TrendMonitor integration for LR alerts (check_lr, check_lr_stagnation)
-- [x] INT-02 (partial): Cross-metric rule: lr-spike + loss-stagnation -> WARN
-
-**New files:** `src/torchinspector/collectors/lr_scheduler.py`
-**Modified files:** `src/torchinspector/monitor.py`, `src/torchinspector/inspector.py`, `src/torchinspector/collectors/__init__.py`
-
-### Phase 14: Batch Size Sensitivity + Full Integration
-
-**Requirements:** BSZ-01, BSZ-02, BSZ-03, BSZ-04, BSZ-05, INT-01 (completion), INT-02 (completion), INT-03, INT-04
-**Status:** ✅ Complete (2026-06-15)
-
-- [x] BSZ-01: Gradient noise scale estimate (TensorBoard scalar)
-- [x] BSZ-02: Anomalously high gradient noise scale -> WARN alert (suggest larger batch)
-- [x] BSZ-03: Micro-batch variance estimation (opt-in, 4-chunk split, 5000-step interval)
-- [x] BSZ-04: Minimum analysis interval 5000 steps to stay within performance budget
-- [x] BSZ-05: Temporarily switch to `model.eval()` during analysis (try/finally state restore)
-- [x] INT-01 (completion): All 4 metrics alert through TrendMonitor with INFO/WARN/CRITICAL
-- [x] INT-02 (completion): Full cross-metric correlation rules (gns_high + convergence_slow, weight_grad_extreme + convergence_slow)
-- [x] INT-03: Performance overhead verified in integration tests
-- [x] INT-04: torch.compile compatibility (best-effort test with skip guards)
-
-**New files:** `src/torchinspector/collectors/batch_sensitivity.py`
-**Modified files:** `src/torchinspector/inspector.py`, `src/torchinspector/collectors/__init__.py`, `src/torchinspector/monitor.py`
-
-## v1.3 Coverage
-
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| CVG-01 | 11 | Pending |
-| CVG-02 | 11 | Pending |
-| CVG-03 | 11 | Pending |
-| CVG-04 | 11 | Pending |
-| CVG-05 | 11 | Pending |
-| WGR-01 | 12 | ✅ Complete |
-| WGR-02 | 12 | ✅ Complete |
-| WGR-03 | 12 | ✅ Complete |
-| WGR-04 | 12 | ✅ Complete |
-| LR-01 | 13 | ✅ Complete |
-| LR-02 | 13 | ✅ Complete |
-| LR-03 | 13 | ✅ Complete |
-| BSZ-01 | 14 | ✅ Complete |
-| BSZ-02 | 14 | ✅ Complete |
-| BSZ-03 | 14 | ✅ Complete |
-| BSZ-04 | 14 | ✅ Complete |
-| BSZ-05 | 14 | ✅ Complete |
-| INT-01 | 11+12+13+14 | ✅ Complete |
-| INT-02 | 12+13+14 | ✅ Complete |
-| INT-03 | 14 | ✅ Complete |
-| INT-04 | 14 | ✅ Complete |
-
-**Coverage: 21/21 = 100%**
-
-## Phase Dependency Chain
-
-```
-Phase 11 (Convergence) -- standalone, enhances TrendMonitor
-    |
-    v
-Phase 12 (Weight/Grad Ratio) -- uses TrendMonitor from Phase 11
-    |
-    v
-Phase 13 (LR Analysis) -- uses TrendMonitor + correlation rules
-    |
-    v
-Phase 14 (Batch Sensitivity + Integration) -- requires all 3 prior phases
-```
-
-## Performance Budget
-
-| Metric | Estimated Overhead | Interval |
-|--------|--------------------|----------|
-| Convergence (CVG) | <0.1% | every step |
-| Weight/Grad Ratio (WGR) | ~2% | interval=100 |
-| LR Analysis | <0.01% | every step |
-| Batch Sensitivity (BSZ) | ~0.4% (amortized) | interval=5000 |
-| **Total** | **~2.5%** | within 5% budget |
-
-## Previous Milestones
+## Phases
 
 <details>
-<summary>✅ v1.0 Core MVP (Phases 1-6) — SHIPPED 2026-06-15</summary>
+<summary>✅ v1.3 通用监控增强 (Phases 11-14) — SHIPPED 2026-06-15</summary>
 
-- [x] Phase 1: Core Observer (5/5 plans) — TensorBoard wrapper, scalar/histogram/graph logging
-- [x] Phase 2: Layer Observer (3/3 plans) — Hook-based activation monitoring, gradient norms
-- [x] Phase 3: Feature Map Viewer (3/3 plans) — CNN feature map visualization, dead neuron detection
-- [x] Phase 4: Explainability Plugin (3/3 plans) — Grad-CAM, Captum integration, attention heatmaps
-- [x] Phase 5: Ecosystem & Polish (3/3 plans) — Lightning callback, HF compat, docs
-- [x] Phase 6: Universal Layer Observability (6/6 plans) — BN/LN/Pooling/RNN, weight heatmaps
+**Goal:** 补全所有网络类型通用的监控指标，让训练可观测性更完整
+**Requirements:** 21/21 complete (100% coverage)
+**Plans:** 11 | **Tests:** 357 | **Source LOC:** 4,432
+
+- [x] Phase 11: Convergence Trajectory Analysis (3/3 plans) — loss trend, speed assessment, divergence detection
+- [x] Phase 12: Weight/Gradient Ratio Monitoring (3/3 plans) — per-layer W/G ratio, vanishing/exploding detection
+- [x] Phase 13: Learning Rate Scheduler Analysis (2/2 plans) — LR anomaly detection, lr-loss correlation
+- [x] Phase 14: Batch Sensitivity + Integration (3/3 plans) — GNS, micro-batch variance, all 4 metrics through TrendMonitor
+
+</details>
+
+<details>
+<summary>✅ v1.2 Smart Monitoring (Phase 10) — SHIPPED 2026-06-15</summary>
+
+- [x] Phase 10: Smart Monitoring (4/4 plans) — Auto detection, trend alerting, health reports
 
 </details>
 
@@ -149,9 +38,14 @@ Phase 14 (Batch Sensitivity + Integration) -- requires all 3 prior phases
 </details>
 
 <details>
-<summary>✅ v1.2 Smart Monitoring (Phase 10) — SHIPPED 2026-06-15</summary>
+<summary>✅ v1.0 Core MVP (Phases 1-6) — SHIPPED 2026-06-15</summary>
 
-- [x] Phase 10: Smart Monitoring (4/4 plans) — Auto detection, trend alerting, health reports
+- [x] Phase 1: Core Observer (5/5 plans) — TensorBoard wrapper, scalar/histogram/graph logging
+- [x] Phase 2: Layer Observer (3/3 plans) — Hook-based activation monitoring, gradient norms
+- [x] Phase 3: Feature Map Viewer (3/3 plans) — CNN feature map visualization, dead neuron detection
+- [x] Phase 4: Explainability Plugin (3/3 plans) — Grad-CAM, Captum integration, attention heatmaps
+- [x] Phase 5: Ecosystem & Polish (3/3 plans) — Lightning callback, HF compat, docs
+- [x] Phase 6: Universal Layer Observability (6/6 plans) — BN/LN/Pooling/RNN, weight heatmaps
 
 </details>
 
@@ -169,12 +63,14 @@ Phase 14 (Batch Sensitivity + Integration) -- requires all 3 prior phases
 | 8. Benchmarks & Docs | v1.1 | 2/2 | ✓ Complete | 2026-06-15 |
 | 9. PyPI Release | v1.1 | 0/2 | Skipped | — |
 | 10. Smart Monitoring | v1.2 | 4/4 | ✓ Complete | 2026-06-15 |
-| 11. Convergence Trajectory | v1.3 | 3/3 | Complete    | 2026-06-15 |
-| 12. Weight/Grad Ratio | v1.3 | 3/3 | ✅ Complete | 2026-06-15 |
-| 13. LR Scheduler Analysis | v1.3 | 2/2 | ✅ Complete | 2026-06-15 |
-| 14. Batch Sensitivity + Integration | v1.3 | 3/3 | ✅ Complete | 2026-06-15 |
+| 11. Convergence Trajectory | v1.3 | 3/3 | ✓ Complete | 2026-06-15 |
+| 12. Weight/Grad Ratio | v1.3 | 3/3 | ✓ Complete | 2026-06-15 |
+| 13. LR Scheduler Analysis | v1.3 | 2/2 | ✓ Complete | 2026-06-15 |
+| 14. Batch Sensitivity + Integration | v1.3 | 3/3 | ✓ Complete | 2026-06-15 |
 
 ---
 
-*Shipped v1.2: 2026-06-15 | 10 phases | 35 plans | 211 tests | 8,203 LOC*
-*Shipped v1.3: 2026-06-15 | 4 phases | 11 plans | 357 tests*
+*Shipped v1.0: 2026-06-15 | 6 phases | 23 plans | 155 tests*
+*Shipped v1.1: 2026-06-15 | 2 phases | 4 plans*
+*Shipped v1.2: 2026-06-15 | 1 phase | 4 plans | 211 tests | 8,203 LOC*
+*Shipped v1.3: 2026-06-15 | 4 phases | 11 plans | 357 tests | 4,432 LOC*
