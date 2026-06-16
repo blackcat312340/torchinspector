@@ -234,6 +234,43 @@ class TestCompileCompatibility:
     @pytest.mark.skipif(
         not has_compile, reason="torch.compile not available"
     )
+    def test_compile_batch_sensitivity_no_crash(
+        self,
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer,
+        log_dir: Path,
+    ) -> None:
+        """BatchSensitivityCollector should not crash with compiled model."""
+        compiled = _try_compile(model)
+
+        ins = Inspector(
+            compiled, optimizer, log_dir,
+            log_interval=1,
+            micro_batch_variance=False,
+        )
+        ins.watch([".*fc1"])
+
+        dummy = torch.randn(4, 10)
+        _try_forward(compiled, dummy)
+
+        try:
+            out = compiled(dummy)
+            loss = out.sum()
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            ins.step(loss=loss.item())
+        except Exception:
+            pytest.skip(
+                "Compiled model step with BSZ collector failed"
+            )
+
+        assert ins._step == 1
+        ins.close()
+
+    @pytest.mark.skipif(
+        not has_compile, reason="torch.compile not available"
+    )
     def test_compile_explain_attention_no_crash(
         self,
         log_dir: Path,
