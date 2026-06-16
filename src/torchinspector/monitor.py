@@ -343,6 +343,38 @@ class TrendMonitor:
         self._current_alerts[alert_key] = level
         return level
 
+    def check_lr(self, lr: float, step: int) -> AlertLevel:
+        """Feed the ``train/lr`` window for correlation lookups.
+
+        Called by ``LRCollector`` when an anomaly is detected.  The LR
+        window is used by ``correlation_check()`` to correlate LR
+        changes with loss stagnation.
+
+        Args:
+            lr: Current learning rate.
+            step: Current training step.
+
+        Returns:
+            Always ``AlertLevel.OK`` (anomaly detection lives in LRCollector).
+        """
+        win = self._windows["train/lr"]
+        win.append(lr)
+        if len(win) > self._window_size:
+            win.pop(0)
+        return AlertLevel.OK
+
+    def check_lr_stagnation(self, step: int) -> None:
+        """Set a one-shot WARN alert for LR-related loss stagnation.
+
+        Called by ``LRCollector`` when loss fails to improve within the
+        50-step response window after an LR anomaly.  Per D-02 this is
+        a single WARN with no escalation.
+
+        Args:
+            step: Current training step.
+        """
+        self._current_alerts["lr_stagnation"] = AlertLevel.WARN
+
     def check_convergence(self, loss: float, step: int) -> AlertLevel:
         """Check loss for convergence trajectory and divergence signals.
 

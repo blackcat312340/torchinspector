@@ -375,8 +375,8 @@ class TestLossResponseWindow:
             optimizer.param_groups[0]["lr"] = 0.5
             collector.collect(step=31 + i, loss_val=1.0)
 
-        # Second spike (resets window)
-        optimizer.param_groups[0]["lr"] = 5.0
+        # Second spike (resets window) — ratio = 10.0/0.5 = 20.0 > 10.0
+        optimizer.param_groups[0]["lr"] = 10.0
         collector.collect(step=60, loss_val=1.0)
 
         assert collector._anomaly_window_active is True
