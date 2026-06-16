@@ -43,19 +43,13 @@
 ### Phase 13: Learning Rate Scheduler Analysis
 
 **Requirements:** LR-01, LR-02, LR-03, INT-01 (partial), INT-02 (partial)
-**Status:** Planning
+**Status:** ✅ Complete (2026-06-15)
 
-- [ ] LR-01: Learning rate change curve (TensorBoard scalar)
-- [ ] LR-02: Anomalous scheduling detection (sudden jump >10x, decay too fast <0.01x) -> WARN alert
-- [ ] LR-03: lr-loss correlation analysis (response delay and amplitude after lr-drop)
-- [ ] INT-01 (partial): TrendMonitor integration for LR alerts
-- [ ] INT-02 (partial): Cross-metric rule: lr-spike + loss-stagnation -> WARN
-
-**Plans:** 2 plans
-
-Plans:
-- [ ] 13-01-PLAN.md — LRCollector class with anomaly detection + TrendMonitor.check_lr()
-- [ ] 13-02-PLAN.md — Inspector wiring + lr_spike+loss_stagnant correlation rule
+- [x] LR-01: Learning rate change curve (TensorBoard scalar)
+- [x] LR-02: Anomalous scheduling detection (sudden jump >10x, decay too fast <0.01x) -> WARN alert
+- [x] LR-03: lr-loss correlation analysis (50-step loss response window after anomaly)
+- [x] INT-01 (partial): TrendMonitor integration for LR alerts (check_lr, check_lr_stagnation)
+- [x] INT-02 (partial): Cross-metric rule: lr-spike + loss-stagnation -> WARN
 
 **New files:** `src/torchinspector/collectors/lr_scheduler.py`
 **Modified files:** `src/torchinspector/monitor.py`, `src/torchinspector/inspector.py`, `src/torchinspector/collectors/__init__.py`
@@ -91,16 +85,16 @@ Plans:
 | WGR-02 | 12 | ✅ Complete |
 | WGR-03 | 12 | ✅ Complete |
 | WGR-04 | 12 | ✅ Complete |
-| LR-01 | 13 | Pending |
-| LR-02 | 13 | Pending |
-| LR-03 | 13 | Pending |
+| LR-01 | 13 | ✅ Complete |
+| LR-02 | 13 | ✅ Complete |
+| LR-03 | 13 | ✅ Complete |
 | BSZ-01 | 14 | Pending |
 | BSZ-02 | 14 | Pending |
 | BSZ-03 | 14 | Pending |
 | BSZ-04 | 14 | Pending |
 | BSZ-05 | 14 | Pending |
-| INT-01 | 11+12+13+14 | Partial (11+12) |
-| INT-02 | 12+13+14 | Partial (12) |
+| INT-01 | 11+12+13+14 | Partial (11+12+13) |
+| INT-02 | 12+13+14 | Partial (12+13) |
 | INT-03 | 14 | Pending |
 | INT-04 | 14 | Pending |
 
@@ -177,7 +171,7 @@ Phase 14 (Batch Sensitivity + Integration) -- requires all 3 prior phases
 | 10. Smart Monitoring | v1.2 | 4/4 | ✓ Complete | 2026-06-15 |
 | 11. Convergence Trajectory | v1.3 | 3/3 | Complete    | 2026-06-15 |
 | 12. Weight/Grad Ratio | v1.3 | 3/3 | ✅ Complete | 2026-06-15 |
-| 13. LR Scheduler Analysis | v1.3 | 0 | Pending | — |
+| 13. LR Scheduler Analysis | v1.3 | 2/2 | ✅ Complete | 2026-06-15 |
 | 14. Batch Sensitivity + Integration | v1.3 | 0 | Pending | — |
 
 ---
