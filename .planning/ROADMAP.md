@@ -24,7 +24,10 @@
   2. TrendMonitor includes attention-aware check methods (`check_attention_entropy`, `check_head_collapse`, `check_head_dead`, `check_head_redundancy`) ready for collectors to call
   3. New correlation rule definitions exist: attention collapse + slow convergence; QKV condition anomaly + gradient anomaly (wired end-to-end in Phase 18)
   4. FlashAttention models automatically fall back to math SDPA backend during attention weight collection without user intervention
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 15-01-PLAN.md — TrendMonitor check_attention() + check_qkv() + correlation rules
+- [ ] 15-02-PLAN.md — Transformer utils (list_transformer_layers, is_transformer_model, force_math_sdpa) + classify_architecture extension
 
 ### Phase 16: AttentionCollector
 **Goal**: Users can observe per-head attention behavior and the system detects unhealthy heads
@@ -78,7 +81,7 @@
 | 12. Weight/Grad Ratio | v1.3 | 3/3 | ✓ Complete | 2026-06-15 |
 | 13. LR Scheduler Analysis | v1.3 | 2/2 | ✓ Complete | 2026-06-15 |
 | 14. Batch Sensitivity + Integration | v1.3 | 3/3 | ✓ Complete | 2026-06-15 |
-| 15. Utils + TrendMonitor Extensions | v1.4 | 0/TBD | Not started | — |
+| 15. Utils + TrendMonitor Extensions | v1.4 | 0/2 | Planning | — |
 | 16. AttentionCollector | v1.4 | 0/TBD | Not started | — |
 | 17. QKVCollector | v1.4 | 0/TBD | Not started | — |
 | 18. Inspector Wiring + Health Report | v1.4 | 0/TBD | Not started | — |
