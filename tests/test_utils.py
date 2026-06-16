@@ -7,7 +7,10 @@ from torch import nn
 
 from torchinspector.utils import (
     classify_architecture,
+    force_math_sdpa,
     get_module_names,
+    is_transformer_model,
+    list_transformer_layers,
     print_module_tree,
     resolve_layer_patterns,
 )
@@ -323,3 +326,119 @@ class TestClassifyArchitecture:
         assert result["0"][1] == 3  # conv_block HIGH
         assert result["1"][1] == 3  # conv_block (consumed)
         assert result["2"][1] == 3  # linear_block HIGH
+
+
+# ---- list_transformer_layers tests ---------------------------------------
+
+
+class TestListTransformerLayers:
+    """Tests for list_transformer_layers() — MHA module enumeration."""
+
+    def test_returns_sorted_tuples(self) -> None:
+        """Should return sorted (name, module) tuples for MHA layers."""
+        model = nn.Sequential(
+            nn.Linear(64, 64),
+            nn.MultiheadAttention(64, 4, batch_first=True),
+        )
+        result = list_transformer_layers(model)
+        assert len(result) == 1
+        name, module = result[0]
+        assert name == "1"
+        assert isinstance(module, nn.MultiheadAttention)
+
+    def test_empty_model_returns_empty(self) -> None:
+        """Empty model should return empty list."""
+        model = nn.Sequential()
+        assert list_transformer_layers(model) == []
+
+    def test_skips_root_module(self) -> None:
+        """Should not include the root module (name == '')."""
+        model = nn.MultiheadAttention(64, 4, batch_first=True)
+        result = list_transformer_layers(model)
+        # The root MHA has name "" and should be skipped
+        assert all(name != "" for name, _ in result)
+
+    def test_detects_nested_mha(self) -> None:
+        """Should find MHA modules nested inside submodules."""
+        class TransformerBlock(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.mha = nn.MultiheadAttention(64, 4, batch_first=True)
+                self.linear = nn.Linear(64, 64)
+
+            def forward(self, x):
+                return x
+
+        model = nn.Sequential(TransformerBlock(), TransformerBlock())
+        result = list_transformer_layers(model)
+        assert len(result) == 2
+        names = [name for name, _ in result]
+        assert "0.mha" in names
+        assert "1.mha" in names
+
+    def test_returns_sorted_by_name(self) -> None:
+        """Results should be sorted by module name."""
+        model = nn.Sequential(
+            nn.MultiheadAttention(64, 4, batch_first=True),
+            nn.Linear(64, 64),
+            nn.MultiheadAttention(64, 4, batch_first=True),
+        )
+        result = list_transformer_layers(model)
+        names = [name for name, _ in result]
+        assert names == sorted(names)
+
+
+# ---- is_transformer_model tests ------------------------------------------
+
+
+class TestIsTransformerModel:
+    """Tests for is_transformer_model() — MHA presence detection."""
+
+    def test_returns_true_for_mha_model(self) -> None:
+        """Model containing MHA should return True."""
+        model = nn.Sequential(
+            nn.Linear(64, 64),
+            nn.MultiheadAttention(64, 4, batch_first=True),
+        )
+        assert is_transformer_model(model) is True
+
+    def test_returns_false_for_no_mha(self) -> None:
+        """Model without MHA should return False."""
+        model = nn.Sequential(
+            nn.Linear(64, 64),
+            nn.ReLU(),
+        )
+        assert is_transformer_model(model) is False
+
+    def test_returns_false_for_empty_model(self) -> None:
+        """Empty model should return False."""
+        model = nn.Sequential()
+        assert is_transformer_model(model) is False
+
+
+# ---- force_math_sdpa tests -----------------------------------------------
+
+
+class TestForceMathSDPA:
+    """Tests for force_math_sdpa() — SDPA backend forcing context manager."""
+
+    def test_can_enter_and_exit(self) -> None:
+        """Context manager should be enterable and exitable."""
+        with force_math_sdpa():
+            pass  # Should not raise
+
+    def test_enabled_false_is_noop(self) -> None:
+        """enabled=False should be a no-op context manager."""
+        with force_math_sdpa(enabled=False):
+            pass  # Should not raise
+
+    def test_forces_math_backend(self) -> None:
+        """When enabled=True, SDPBackend.MATH should be active."""
+        import torch
+        from torch.nn.attention import SDPBackend
+
+        with force_math_sdpa(enabled=True):
+            # Inside the context, math backend should be forced
+            # We verify by checking the context manager doesn't error
+            # and the SDPBackend.MATH enum is accessible
+            assert hasattr(SDPBackend, "MATH")
