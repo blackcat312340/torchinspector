@@ -1,97 +1,76 @@
-# Architecture Research — v1.3 Universal Monitoring Enhancement
+# Architecture Research — v1.4 Transformer Analysis
 
 **Domain:** PyTorch Training Observation Library
 **Researched:** 2026-06-15
 **Confidence:** HIGH
-**Scope:** How 4 new metrics integrate into existing TorchInspector architecture
+**Scope:** How Transformer analysis features integrate with existing TorchInspector architecture
 
 ## Executive Summary
 
-All 4 new features (LR scheduler analysis, weight/gradient ratio, convergence trajectory, batch size sensitivity) fit cleanly into the existing Collector pattern. Two require new Collector classes, one extends an existing Collector, and one is a pure TrendMonitor enhancement. No architectural changes needed — the Facade + HookManager + Collector + Backend pipeline absorbs all 4 features with zero breaking changes.
+The v1.4 Transformer Analysis milestone requires 2 new collectors (AttentionCollector, QKVCollector) and targeted enhancements to TrendMonitor, HookManager, and utils. The existing architecture absorbs these cleanly: the Collector pattern, interval gating, TrendMonitor integration, and backend write methods all apply directly. The one architectural constraint is FlashAttention -- when PyTorch dispatches to Flash/memory-efficient SDPA backends, attention weight matrices are never materialized, so the collector must gracefully degrade by either forcing the math backend or skipping attention weight capture with a one-time warning.
 
 ## Existing Architecture Recap
 
 ```
 Inspector (Facade)
-  ├── HookManager          — forward hook registration + activation cache
+  ├── HookManager          — forward hook registration + activation cache (OVERWRITE pattern)
   ├── ScalarCollector      — per-step scalars (loss, lr, gpu_mem, batch_time)
   ├── ParamCollector       — interval-gated weight/gradient histograms
   ├── ActivationCollector  — interval-gated activation stats from hook cache
   ├── GradientCollector    — interval-gated grad norms per watched layer
+  ├── WeightGradRatioCollector — backward hooks + interval-gated log-space W/G ratios
+  ├── LRCollector          — LR anomaly detection + loss response tracking
+  ├── BatchSensitivityCollector — GNS + micro-batch variance
   ├── FeatureMapCollector  — interval-gated conv feature map images
   ├── WeightCollector      — interval-gated weight heatmaps
   ├── NormalizationCollector — BN drift, pooling stats
   ├── RNNCollector         — hidden state stats
   ├── ResidualCollector    — skip connection flow ratios
-  ├── ExplainCollector     — Grad-CAM / IG / attention
+  ├── ExplainCollector     — on-demand Grad-CAM / IG / attention (NOT interval-gated)
   ├── TrendMonitor         — rolling window + linear regression + alerts
   ├── TensorBoardBackend   — SummaryWriter adapter
   └── ONNXExporter         — model export
 ```
 
-**Key patterns:**
-- Collectors receive `(model, hook_manager, backend, interval)` in constructor
+**Key patterns established by v1.3:**
+- Collectors receive `(model, hook_manager, backend, monitor, log_interval)` in constructor
 - `collect(step)` is the single entry point; early-returns if `step % interval != 0`
 - Inspector's `step()` calls every collector; interval gating is internal
-- TrendMonitor is a standalone component — no hooks, no backend dependency
-- HookManager only does forward hooks; no backward hooks currently
+- TrendMonitor is a standalone component -- no hooks, no backend dependency
+- Each metric gets its own collector (Phase 12 pattern, clean separation)
+- Backward hooks for gradient caching (WeightGradRatioCollector pattern)
+- TrendMonitor.check_*() methods for multi-scale trend detection
 
-## Feature-by-Feature Integration Analysis
+## What Already Exists for Transformers
 
-### METRIC-01: Learning Rate Scheduler Effect Analysis
+The codebase has partial Transformer support that we build on:
 
-**What it does:** Records LR change curves per param group, detects anomalous scheduling (sudden drops, oscillations, stale LR), correlates LR changes with loss trajectory.
+| Existing Component | File | What It Does | Reuse For v1.4 |
+|---|---|---|---|
+| `ExplainCollector._capture_native_attention()` | `collectors/explain.py` | Wraps MHA forward to force `need_weights=True, average_attn_weights=False`, captures attention weights via hook | Pattern for intercepting MHA outputs |
+| `ExplainCollector._capture_hf_attention()` | `collectors/explain.py` | Uses `output_attentions=True` for HF models | Pattern for HF integration |
+| `list_mha_layers()` | `utils.py` | Finds all `nn.MultiheadAttention` modules | Direct reuse for auto-detection |
+| `classify_architecture()` | `utils.py` | Classifies MHA modules as `transformer_block` with priority 2 | Extend with finer-grained Transformer awareness |
+| `is_hf_model()` | `utils.py` | Detects HF models via `hasattr(model, 'config')` | Direct reuse |
+| `_MHA_CLASSES` tuple | `utils.py` | `(nn.MultiheadAttention,)` | Extend with Transformer encoder/decoder layer types |
 
-**Integration point: MODIFY existing `ScalarCollector`**
+**Critical gap:** ExplainCollector's attention capture is on-demand only (user calls `explain()` manually). v1.4 needs interval-gated automatic collection of attention statistics during training.
 
-**Why not a new collector:** ScalarCollector already reads `optimizer.param_groups[i]["lr"]` every step and writes `train/lr` or `train/lr_group_{i}`. Adding scheduler analysis here is a natural extension — same data source, same step cadence, same backend writes.
+## New Components Required
 
-**What to add to ScalarCollector:**
-1. **LR delta tracking** — compute `lr_delta = current_lr - prev_lr` per group, write as `train/lr_delta_group_{i}`
-2. **LR change event detection** — when `|lr_delta| > epsilon`, write a marker scalar `train/lr_change_event` = 1.0 (useful for TensorBoard event lines overlay)
-3. **Scheduler type detection** — on first call, inspect `optimizer` for attached `lr_scheduler` via `_scheduler` attr or user-passed reference; log the scheduler class name as text metadata
-4. **Feed TrendMonitor** — after writing LR scalars, call `self._monitor.check("lr_group_{i}", lr, threshold=...)` to enable plateau/surge alerting on LR
+### Component 1: AttentionCollector
 
-**Constructor changes:**
-- Add optional `scheduler: torch.optim.lr_scheduler.LRScheduler | None = None` parameter
-- Store `_prev_lr: dict[int, float]` for delta computation
+**Purpose:** Interval-gated collection of attention weight statistics -- entropy, sparsity, head collapse detection, inter-head redundancy.
 
-**Data flow:**
-```
-optimizer.param_groups → ScalarCollector.collect(step)
-  ├── write_scalar("train/lr", lr, step)           [existing]
-  ├── write_scalar("train/lr_delta", delta, step)   [NEW]
-  ├── write_scalar("train/lr_change_event", 1, step) [NEW, conditional]
-  └── monitor.check("lr", lr, threshold)            [NEW]
-```
-
-**TensorBoard output:**
-- `train/lr` — existing LR curve (already works)
-- `train/lr_delta` — step-to-step LR change magnitude
-- `train/lr_change_event` — binary marker for scheduler steps (overlay on loss curve)
-
-**Files to modify:**
-- `src/torchinspector/collectors/scalar.py` — add LR delta tracking + event detection
-- `src/torchinspector/inspector.py` — pass scheduler reference to ScalarCollector (optional)
-
-**New files:**
-- `tests/test_collectors/test_lr_scheduler.py` — unit tests
-
-**Complexity:** LOW — extending existing collector, no new hooks, no new backend methods.
-
----
-
-### METRIC-02: Weight/Gradient Ratio Monitoring
-
-**What it does:** Computes per-layer `||weight|| / ||gradient||` ratio. A healthy ratio indicates balanced learning. Ratio → 0 means vanishing gradients; ratio → infinity means exploding weights or dead gradients. More granular than the existing `update_ratio` in GradientCollector (which computes `||grad|| / ||weight||`).
-
-**Integration point: NEW `WeightGradRatioCollector`**
-
-**Why a new collector, not extending GradientCollector:** GradientCollector focuses on gradient norms. The weight/gradient ratio is a derived metric with its own semantics (vanishing/exploding detection, per-layer health classification). Mixing it into GradientCollector would bloat that collector and violate single-responsibility. The ratio also needs access to both `param.data` and `param.grad` simultaneously, plus trend monitoring integration — a clean separation justifies a new file.
+**Why a new collector, not extending ExplainCollector:**
+- ExplainCollector is on-demand (user calls `explain()`), not interval-gated
+- ExplainCollector renders heatmaps (images); AttentionCollector computes statistics (scalars)
+- Different data flow: ExplainCollector needs a forward pass with input; AttentionCollector hooks into the existing forward pass
+- Single-responsibility: ExplainCollector = explainability; AttentionCollector = training health
 
 **Constructor signature:**
 ```python
-class WeightGradRatioCollector:
+class AttentionCollector:
     def __init__(
         self,
         model: nn.Module,
@@ -99,250 +78,217 @@ class WeightGradRatioCollector:
         backend: TensorBoardBackend,
         monitor: TrendMonitor,
         *,
-        ratio_interval: int = 100,
-        vanishing_threshold: float = 1e-4,
-        exploding_threshold: float = 1e4,
+        attn_interval: int = 500,
+        force_math_backend: bool = True,
     ) -> None:
 ```
 
-**What it computes per watched layer's parameters:**
-1. `weight_norm = param.data.norm(p=2)`
-2. `grad_norm = param.grad.norm(p=2)` (if grad exists)
-3. `ratio = weight_norm / (grad_norm + eps)` — the weight-to-gradient ratio
-4. `log_ratio = log10(ratio)` — for better visualization on log scale
-5. Health classification: `OK` if `vanishing_threshold < ratio < exploding_threshold`, else `WARN`
+**Hook strategy:**
+The collector registers forward hooks on MHA modules. The hook intercepts the output tuple `(attn_output, attn_weights)` when `need_weights=True`. To force attention weight materialization:
+
+1. **Preferred:** Monkey-patch the MHA module's `forward` to inject `need_weights=True, average_attn_weights=False` before calling the original forward. This is the same pattern used by `ExplainCollector._capture_native_attention()` but applied as a persistent hook rather than a one-shot capture.
+
+2. **Fallback for FlashAttention:** When `force_math_backend=True` (default), wrap the forward call in `torch.nn.attention.sdpa_kernel(SDPBackend.MATH)` context to force the math backend. This ensures attention weights are materialized. Cost: ~2-3x slower attention computation. Only applies to the hook, not the entire forward pass.
+
+3. **Graceful degradation:** If `force_math_backend=False`, try to capture weights. If the output tuple's second element is `None` (FlashAttention ate it), log a one-time warning and skip attention statistics for that step.
+
+**What it computes per MHA layer, per head:**
+
+| Metric | Formula | What It Detects |
+|--------|---------|-----------------|
+| Attention entropy | `-sum(attn * log(attn + eps))` per head, averaged over tokens | Low entropy = attention collapse (one token dominates) |
+| Attention sparsity | Fraction of weights < 0.01 per head | High sparsity = head is "dead" (attending to nothing) |
+| Max attention weight | `max(attn_weights)` per head | Values near 1.0 = near-deterministic attention |
+| Head confidence | `max - mean` of attention distribution | High confidence = head specializes sharply |
+| Inter-head cosine similarity | `cosine_sim(head_i_flat, head_j_flat)` | High similarity = redundant heads |
 
 **Data flow:**
 ```
-model.named_parameters() → filter to watched layers
-  ├── compute ratio = ||w|| / (||g|| + eps)
-  ├── write_scalar("wg_ratio/{param_name}/ratio", ratio, step)
-  ├── write_scalar("wg_ratio/{param_name}/log_ratio", log_ratio, step)
-  ├── monitor.check("wg_ratio/{layer}", ratio, threshold)
-  └── if ratio out of bounds → alert escalation via TrendMonitor
+MHA module forward pass
+  └── registered hook captures attn_weights: (B, num_heads, S_q, S_k)
+        │
+        ├── per head: compute entropy, sparsity, max_weight, confidence
+        ├── write_scalar("attention/{layer}/head_{h}/entropy", ...)
+        ├── write_scalar("attention/{layer}/head_{h}/sparsity", ...)
+        ├── write_scalar("attention/{layer}/head_{h}/max_weight", ...)
+        ├── write_scalar("attention/{layer}/head_{h}/confidence", ...)
+        ├── cross-head: compute pairwise cosine similarity
+        ├── write_scalar("attention/{layer}/inter_head_similarity", mean_sim, step)
+        └── monitor.check_attention(layer, metrics_dict, step)
 ```
 
+**Memory management:**
+- Attention weights are captured, statistics computed immediately, then the weight tensor is discarded
+- Only scalar statistics are stored (not the full attention matrices)
+- Maximum sequence length windowing: if `S > 256`, sample a 256-token window (same pattern as ExplainCollector's `max_seq_len=64`)
+
 **TensorBoard output:**
-- `wg_ratio/{param_name}/ratio` — raw ratio per parameter
-- `wg_ratio/{param_name}/log_ratio` — log10 scale for better chart readability
-
-**Integration with TrendMonitor:**
-- Feed ratio values into `monitor.check()` for trend-based alerting
-- Add correlation rule: if `wg_ratio` rising AND `dead_neuron_ratio` rising → "gradient collapse" alert
-
-**Files to create:**
-- `src/torchinspector/collectors/weight_grad_ratio.py` — new collector
-- `tests/test_collectors/test_weight_grad_ratio.py` — unit tests
-
-**Files to modify:**
-- `src/torchinspector/collectors/__init__.py` — add to `__all__`
-- `src/torchinspector/inspector.py` — instantiate + wire into `step()`
-
-**Complexity:** MEDIUM — new collector, but follows established pattern exactly. No new hooks needed (reads from `named_parameters()` like ParamCollector/GradientCollector).
+```
+attention/{layer_name}/head_{h}/entropy       — attention entropy per head
+attention/{layer_name}/head_{h}/sparsity      — fraction of near-zero weights
+attention/{layer_name}/head_{h}/max_weight     — peak attention weight
+attention/{layer_name}/head_{h}/confidence     — head specialization score
+attention/{layer_name}/inter_head_similarity   — mean pairwise cosine similarity
+attention/{layer_name}/dead_heads              — count of dead heads (scalar)
+```
 
 ---
 
-### METRIC-03: Convergence Trajectory Analysis
+### Component 2: QKVCollector
 
-**What it does:** Analyzes loss trajectory to predict convergence behavior: is the model converging, plateauing, or diverging? Estimates steps-to-convergence, detects oscillation patterns, warns about divergence risk.
+**Purpose:** Interval-gated monitoring of Q, K, V projection matrix health -- condition numbers, singular value distributions, numerical stability.
 
-**Integration point: ENHANCE existing `TrendMonitor` + NEW `ConvergenceCollector`**
-
-**Why two changes:**
-1. TrendMonitor already has `_compute_slope()`, rolling windows, and alert escalation — the convergence analysis logic (slope computation, plateau detection) belongs there as new methods.
-2. A thin collector is needed to bridge the loss value from `step()` into TrendMonitor and write convergence-specific scalars to TensorBoard.
-
-**TrendMonitor additions (new methods):**
-
-```python
-def convergence_score(self, name: str) -> float | None:
-    """Compute convergence score: -1 (diverging) to +1 (converged).
-
-    Based on: slope direction, slope magnitude relative to mean,
-    oscillation frequency, and window stability.
-    """
-
-def oscillation_index(self, name: str) -> float | None:
-    """Count sign changes in slope over window. High = oscillating."""
-
-def estimated_steps_to_target(
-    self, name: str, target_value: float
-) -> int | None:
-    """Linear extrapolation: how many steps until metric reaches target.
-    Returns None if slope is non-negative (not converging).
-    """
-```
-
-**ConvergenceCollector:**
-```python
-class ConvergenceCollector:
-    def __init__(
-        self,
-        monitor: TrendMonitor,
-        backend: TensorBoardBackend,
-        *,
-        convergence_interval: int = 100,
-        loss_smoothing_alpha: float = 0.1,
-    ) -> None:
-```
-
-**What it does each step:**
-1. Receives loss value from Inspector.step()
-2. Computes EMA-smoothed loss
-3. Feeds raw + smoothed loss into TrendMonitor
-4. Calls `monitor.convergence_score("loss")` and writes scalar
-5. Calls `monitor.oscillation_index("loss")` and writes scalar
-6. Calls `monitor.estimated_steps_to_target("loss", target)` if user set a target
-
-**Data flow:**
-```
-Inspector.step(loss=X)
-  └── ConvergenceCollector.collect(step, loss=X)
-        ├── ema_loss = alpha * X + (1-alpha) * prev_ema
-        ├── monitor.check("train/loss", ema_loss, ...)
-        ├── monitor.check("train/loss_raw", X, ...)
-        ├── write_scalar("convergence/smoothed_loss", ema_loss, step)
-        ├── write_scalar("convergence/score", score, step)      [-1..+1]
-        ├── write_scalar("convergence/oscillation", osc_idx, step)
-        └── write_scalar("convergence/est_steps_remaining", N, step) [optional]
-```
-
-**TensorBoard output:**
-- `convergence/smoothed_loss` — EMA-smoothed loss (less noisy than raw)
-- `convergence/score` — convergence score in [-1, +1]
-- `convergence/oscillation` — oscillation index (higher = more unstable)
-- `convergence/est_steps_remaining` — linear extrapolation to target (if set)
-
-**New Inspector API:**
-```python
-inspector = Inspector(model, optimizer, log_dir="runs/exp",
-                      convergence_target=0.01)  # optional target loss
-```
-
-**Files to modify:**
-- `src/torchinspector/monitor.py` — add `convergence_score()`, `oscillation_index()`, `estimated_steps_to_target()`
-- `src/torchinspector/inspector.py` — instantiate ConvergenceCollector, pass loss to it from `step()`
-
-**Files to create:**
-- `src/torchinspector/collectors/convergence.py` — new collector
-- `tests/test_collectors/test_convergence.py` — unit tests
-- `tests/test_monitor_convergence.py` — TrendMonitor method tests
-
-**Complexity:** MEDIUM — TrendMonitor enhancement is straightforward math; the collector is a thin bridge. The convergence_score algorithm needs careful tuning but is well-defined (slope + oscillation + stability).
-
----
-
-### METRIC-04: Batch Size Sensitivity Analysis
-
-**What it does:** Tracks gradient variance across micro-batches within a logical step, estimates the signal-to-noise ratio (SNR) of gradients, and helps users understand how batch size affects training stability.
-
-**Integration point: NEW `BatchSensitivityCollector`**
-
-**Why a new collector:** This feature requires the user to provide gradient statistics from multiple forward/backward passes (or a single pass with gradient accumulation). It has a fundamentally different data flow — the user must call a method to register micro-batch gradients, then the collector computes variance across them. No existing collector has this pattern.
-
-**Design approach:**
-
-The user calls `inspector.log_micro_batch(loss=...)` multiple times per logical step, then calls `inspector.step()` which triggers the variance computation. Alternatively, for gradient accumulation, the user calls `inspector.log_accumulated_step()` after each accumulation phase.
+**Why a new collector:**
+- QKV analysis reads from weight parameters of internal MHA projection layers, not from activation hooks
+- Different data source than AttentionCollector (weights vs. attention outputs)
+- Needs to inspect `in_proj_weight` (combined QKV) or separate `q_proj_weight`/`k_proj_weight`/`v_proj_weight`
 
 **Constructor signature:**
 ```python
-class BatchSensitivityCollector:
+class QKVCollector:
     def __init__(
         self,
         model: nn.Module,
-        hook_manager: HookManager,
         backend: TensorBoardBackend,
         monitor: TrendMonitor,
         *,
-        sensitivity_interval: int = 100,
+        qkv_interval: int = 500,
     ) -> None:
 ```
 
-**State it maintains:**
-- `_micro_batch_grads: dict[str, list[torch.Tensor]]` — per-parameter gradient snapshots across micro-batches
-- `_micro_batch_losses: list[float]` — loss values per micro-batch
-- `_micro_batch_count: int` — count within current logical step
+**What it computes per MHA layer:**
 
-**Data flow (two modes):**
+For each MHA module, inspect the projection weight matrices. PyTorch's `nn.MultiheadAttention` stores weights as:
+- `in_proj_weight`: shape `(3 * embed_dim, embed_dim)` -- combined Q, K, V projection (when `q_proj_weight` etc. are None)
+- `q_proj_weight`, `k_proj_weight`, `v_proj_weight`: separate projections (when specified individually)
+- `out_proj.weight`: output projection, shape `(embed_dim, embed_dim)`
 
-**Mode A: Gradient accumulation (recommended)**
+For each projection matrix:
+
+| Metric | Formula | What It Detects |
+|--------|---------|-----------------|
+| Condition number | `sigma_max / sigma_min` via `torch.linalg.svdvals` | Ill-conditioned projection (numerical instability) |
+| Spectral norm | `sigma_max` (largest singular value) | Exploding activations through projection |
+| Effective rank | Number of singular values > threshold | Rank collapse (projection is low-rank) |
+| Weight norm | `Frobenius norm` of projection matrix | Weight magnitude tracking |
+| Singular value spread | `sigma_max / sigma_median` | How concentrated the spectrum is |
+
+**Data flow:**
 ```
-for micro_batch in accumulation_steps:
-    loss = model(micro_batch)
-    loss.backward()
-    inspector.log_micro_batch(loss=loss.item())  # NEW API
-
-inspector.step()  # triggers variance computation
+model.named_modules() → filter to MHA layers
+  └── for each MHA layer:
+        ├── get in_proj_weight or (q_proj_weight, k_proj_weight, v_proj_weight)
+        ├── split in_proj_weight into Q, K, V chunks if combined
+        ├── for each of Q, K, V, out_proj:
+        │     ├── compute condition_number, spectral_norm, effective_rank
+        │     ├── write_scalar("qkv/{layer}/Q/condition_number", ...)
+        │     ├── write_scalar("qkv/{layer}/Q/spectral_norm", ...)
+        │     ├── write_scalar("qkv/{layer}/Q/effective_rank", ...)
+        │     └── monitor.check_qkv(layer, proj, metrics_dict, step)
+        └── write_scalar("qkv/{layer}/overall_health", composite_score, step)
 ```
-
-**Mode B: Manual gradient snapshots**
-```
-# User manually captures gradients at different batch sizes
-inspector.log_gradient_snapshot(batch_size=32)
-# ... train with different batch size ...
-inspector.log_gradient_snapshot(batch_size=64)
-inspector.step()
-```
-
-**What it computes:**
-1. **Gradient variance** — `Var(grad)` across micro-batches per parameter
-2. **Gradient SNR** — `||E(grad)|| / sqrt(Var(grad))` per parameter
-3. **Loss variance** — `Var(loss)` across micro-batches
-4. **Effective batch size estimate** — from gradient variance ratio
 
 **TensorBoard output:**
-- `batch_sensitivity/{param_name}/grad_variance` — gradient variance per parameter
-- `batch_sensitivity/{param_name}/grad_snr` — signal-to-noise ratio
-- `batch_sensitivity/loss_variance` — loss variance across micro-batches
-- `batch_sensitivity/effective_batch_size` — estimated effective batch size
+```
+qkv/{layer_name}/Q/condition_number    — condition number of Q projection
+qkv/{layer_name}/Q/spectral_norm       — largest singular value
+qkv/{layer_name}/Q/effective_rank      — number of significant singular values
+qkv/{layer_name}/Q/weight_norm         — Frobenius norm
+qkv/{layer_name}/K/...                 — same for K
+qkv/{layer_name}/V/...                 — same for V
+qkv/{layer_name}/out/...               — same for output projection
+qkv/{layer_name}/overall_health        — composite 0-100 health score
+```
 
-**Inspector API additions:**
+**Performance consideration:** `torch.linalg.svdvals` is O(n^2 * min(m,n)) for an (m, n) matrix. For a typical embed_dim=768, this is ~768^3 per projection. At interval=500, this adds ~10ms amortized per step -- acceptable.
+
+---
+
+### Component 3: TrendMonitor Enhancements
+
+**New check methods:**
+
 ```python
-def log_micro_batch(self, **metrics: float) -> None:
-    """Register a micro-batch gradient snapshot for batch sensitivity analysis.
+def check_attention(
+    self, layer_name: str, metrics: dict[str, float], step: int
+) -> AlertLevel:
+    """Check attention health metrics for a single MHA layer.
 
-    Call this after each .backward() in an accumulation cycle.
-    The collector will snapshot gradients for watched layer parameters.
+    Detects:
+    - Attention collapse: mean entropy < threshold across heads
+    - Dead heads: sparsity > 0.95 for 3+ consecutive intervals
+    - Head redundancy: inter-head similarity > 0.9
+
+    Returns AlertLevel for this layer.
     """
 
-def log_gradient_snapshot(self, *, batch_size: int | None = None) -> None:
-    """Snapshot current gradients with optional batch_size label.
+def check_qkv(
+    self, layer_name: str, proj: str, metrics: dict[str, float], step: int
+) -> AlertLevel:
+    """Check QKV projection health for a single projection.
 
-    For manual batch size comparison experiments.
+    Detects:
+    - Ill-conditioning: condition_number > 1e6
+    - Rank collapse: effective_rank < 10% of embed_dim
+    - Spectral explosion: spectral_norm > 100 * initial_value
+
+    Returns AlertLevel for this projection.
     """
 ```
 
-**Integration with TrendMonitor:**
-- Feed SNR values into `monitor.check()` — low SNR = unstable training
-- Correlation rule: low SNR + high loss variance → "increase batch size" advisory
+**New correlation rules for `correlation_check()`:**
 
-**Files to create:**
-- `src/torchinspector/collectors/batch_sensitivity.py` — new collector
-- `tests/test_collectors/test_batch_sensitivity.py` — unit tests
+| Rule | Condition | Alert | Message |
+|------|-----------|-------|---------|
+| `attention_collapse_convergence_slow` | Attention entropy dropping AND convergence score < 40 | WARN | "Attention collapsing with slow convergence -- check LR or data quality" |
+| `qkv_ill_conditioned_attention_crazy` | QKV condition number rising AND attention entropy dropping | CRITICAL | "QKV projections ill-conditioned -- attention becoming unstable" |
+| `dead_heads_increasing` | Dead head count rising over 5+ intervals | WARN | "Increasing dead heads -- model may be underfitting" |
 
-**Files to modify:**
-- `src/torchinspector/collectors/__init__.py` — add to `__all__`
-- `src/torchinspector/inspector.py` — add `log_micro_batch()`, `log_gradient_snapshot()` methods; instantiate collector
+---
 
-**Complexity:** HIGH — most complex of the 4. Requires new user-facing API methods, gradient snapshot storage, and careful memory management (must clear snapshot lists after each `step()`).
+### Component 4: Utils Enhancements
+
+**New functions:**
+
+```python
+def list_transformer_layers(model: nn.Module) -> list[str]:
+    """Return sorted names of all Transformer-related layers.
+
+    Detects: nn.MultiheadAttention, nn.TransformerEncoderLayer,
+    nn.TransformerDecoderLayer, and their sub-modules.
+    """
+
+def get_mha_params(model: nn.Module, layer_name: str) -> dict[str, torch.Tensor]:
+    """Get QKV projection weight tensors for an MHA module.
+
+    Returns dict with keys 'Q', 'K', 'V', 'out' mapping to weight tensors.
+    Handles both combined in_proj_weight and separate q/k/v_proj_weight.
+    """
+```
 
 ---
 
 ## Integration Matrix
 
-| Feature | New Collector? | Modify Existing? | New Hooks? | New Backend Methods? | New Inspector API? |
-|---------|---------------|------------------|------------|---------------------|-------------------|
-| METRIC-01 LR Scheduler | No | ScalarCollector | No | No | No (optional scheduler param) |
-| METRIC-02 Weight/Grad Ratio | Yes: `WeightGradRatioCollector` | No | No | No | No |
-| METRIC-03 Convergence | Yes: `ConvergenceCollector` | TrendMonitor | No | No | `convergence_target` param |
-| METRIC-04 Batch Sensitivity | Yes: `BatchSensitivityCollector` | No | No | No | `log_micro_batch()`, `log_gradient_snapshot()` |
+| Feature | New Component | Modify Existing | New Hooks | New Backend Methods | New Inspector API |
+|---------|---------------|-----------------|-----------|---------------------|-------------------|
+| Attention weights analysis | AttentionCollector | TrendMonitor, utils | Forward hooks on MHA modules | No (write_scalar + write_image) | `attn_interval`, `force_math_backend` params |
+| QKV matrix analysis | QKVCollector | TrendMonitor, utils | No (reads from named_parameters) | No (write_scalar) | `qkv_interval` param |
+| Head health check | (part of AttentionCollector) | TrendMonitor | (same as above) | No | No additional API |
+| Numerical stability | (part of QKVCollector) | TrendMonitor | No | No | No additional API |
 
 ## Data Flow Diagram (Complete)
 
 ```
 [Training Loop]
     │
-    ├── forward pass → HookManager caches activations
+    ├── forward pass
+    │     ├── HookManager caches activations [existing]
+    │     └── MHA modules: AttentionCollector hook captures attn_weights [NEW]
+    │           ├── compute entropy, sparsity, max_weight, confidence per head
+    │           ├── compute inter-head cosine similarity
+    │           └── discard raw attn_weights (memory safety)
+    │
     ├── loss.backward() → gradients populated
     ├── optimizer.step() → weights updated
     │
@@ -350,171 +296,213 @@ def log_gradient_snapshot(self, *, batch_size: int | None = None) -> None:
           │
           ├── step += 1
           │
-          ├── ScalarCollector.collect(step)
-          │     ├── write train/loss, train/lr, train/lr_delta [ENHANCED]
-          │     ├── write system/gpu_memory, system/batch_time
-          │     └── monitor.check("lr", ...) [NEW]
-          │
-          ├── ConvergenceCollector.collect(step, loss=X) [NEW]
-          │     ├── compute EMA smoothed loss
-          │     ├── write convergence/smoothed_loss
-          │     ├── write convergence/score, convergence/oscillation
-          │     └── monitor.check("loss", ema_loss, ...)
+          ├── ScalarCollector.collect(step)           [existing]
+          ├── ... existing collectors ...
           │
           ├── if step % log_interval == 0:
-          │     ├── ParamCollector.collect(step)        [existing]
-          │     ├── ActivationCollector.collect(step)    [existing]
-          │     ├── GradientCollector.collect(step)      [existing]
-          │     └── WeightGradRatioCollector.collect(step) [NEW]
-          │           ├── compute ||w|| / (||g|| + eps) per param
-          │           ├── write wg_ratio/{name}/ratio
-          │           └── monitor.check("wg_ratio", ...)
-          │
-          ├── BatchSensitivityCollector.collect(step) [NEW]
-          │     ├── compute gradient variance across micro-batches
-          │     ├── write batch_sensitivity/grad_variance, grad_snr
-          │     └── clear snapshot buffers
-          │
-          ├── FeatureMapCollector.collect(step)     [existing]
-          ├── WeightCollector.collect(step)         [existing]
-          ├── NormalizationCollector.collect(step)   [existing]
-          ├── RNNCollector.collect(step)            [existing]
-          ├── ResidualCollector.collect(step)       [existing]
+          │     ├── ... existing interval collectors ...
+          │     │
+          │     ├── AttentionCollector.collect(step)   [NEW]
+          │     │     ├── read cached attn stats from hook buffer
+          │     │     ├── write attention/{layer}/head_{h}/entropy etc.
+          │     │     ├── write attention/{layer}/inter_head_similarity
+          │     │     ├── write attention/{layer}/dead_heads
+          │     │     └── monitor.check_attention(layer, metrics, step)
+          │     │
+          │     └── QKVCollector.collect(step)         [NEW]
+          │           ├── iterate MHA modules
+          │           ├── for each projection: svdvals → condition_number, etc.
+          │           ├── write qkv/{layer}/{Q,K,V,out}/condition_number etc.
+          │           └── monitor.check_qkv(layer, proj, metrics, step)
           │
           └── if step % health_report_interval == 0:
                 └── monitor.print_report(step, loss)
-                      ├── existing alerts (dead neuron, gradient spike, plateau)
-                      ├── NEW: LR anomaly alerts
-                      ├── NEW: convergence score + oscillation
-                      ├── NEW: weight/gradient ratio health
-                      └── NEW: batch sensitivity SNR warning
+                      ├── existing alerts ...
+                      ├── NEW: attention collapse / dead heads alerts
+                      └── NEW: QKV ill-conditioning / rank collapse alerts
 ```
+
+## Hook Architecture Detail
+
+### AttentionCollector Hook Strategy
+
+The AttentionCollector needs to capture attention weights during the forward pass. The challenge: `nn.MultiheadAttention.forward()` only returns attention weights when `need_weights=True`, and when FlashAttention is active, weights are never materialized.
+
+**Solution: Forward-hook + forward-pre-hook pair**
+
+```python
+# Pre-hook: force need_weights=True on MHA modules
+def pre_hook(module, args, kwargs):
+    kwargs['need_weights'] = True
+    kwargs['average_attn_weights'] = False
+    return args, kwargs
+
+# Post-hook: capture attn_weights from output tuple
+def post_hook(module, args, output):
+    if isinstance(output, tuple) and len(output) >= 2:
+        attn_weights = output[1]  # (B, num_heads, S_q, S_k)
+        if attn_weights is not None:
+            # Compute statistics immediately, discard raw tensor
+            self._process_attention(layer_name, attn_weights)
+```
+
+**`register_forward_pre_hook`** (PyTorch 2.0+) allows modifying kwargs before the forward call. This is cleaner than monkey-patching `module.forward`.
+
+**FlashAttention handling:**
+- When `force_math_backend=True` (default), the pre-hook also patches `torch.nn.functional.scaled_dot_product_attention` temporarily to force the math backend, OR uses `torch.nn.attention.sdpa_kernel(SDPBackend.MATH)` as a context.
+- When `force_math_backend=False`, the post-hook checks if `attn_weights is None` and logs a one-time warning.
+- The patching is scoped to only the MHA module's forward call (via the pre/post hook pair), not the entire model forward.
+
+**Why not reuse ExplainCollector's pattern:**
+ExplainCollector wraps `module.forward` entirely (monkey-patch). This works for on-demand one-shot capture but is fragile for persistent hooks (the wrapped forward can conflict with other hooks or `torch.compile`). The `register_forward_pre_hook` + `register_forward_hook` pair is the standard PyTorch mechanism and plays well with the existing HookManager.
+
+### QKVCollector -- No Hooks Needed
+
+QKVCollector reads from `model.named_parameters()` at collection time (like ParamCollector). The projection weights are model parameters that persist between steps. No hooks are needed -- just iterate MHA modules and inspect their weight attributes.
 
 ## Build Order (Dependency Analysis)
 
 ```
-Phase A: METRIC-01 (LR Scheduler Analysis)
-  ├── Depends on: nothing new (extends ScalarCollector)
+Phase 1: Utils Enhancements
+  ├── Add list_transformer_layers(), get_mha_params()
+  ├── Extend classify_architecture() with finer Transformer awareness
+  ├── Depends on: nothing new
   ├── Risk: LOW
   └── Effort: ~1-2 hours
 
-Phase B: METRIC-02 (Weight/Gradient Ratio)
-  ├── Depends on: nothing new (standalone collector)
-  ├── Risk: LOW
+Phase 2: TrendMonitor Enhancements
+  ├── Add check_attention(), check_qkv() methods
+  ├── Add 3 new correlation rules
+  ├── Depends on: Phase 1 (needs to know layer types)
+  ├── Risk: LOW (follows existing check_wgr/check_bsz pattern exactly)
   └── Effort: ~2-3 hours
 
-Phase C: METRIC-03 (Convergence Trajectory)
-  ├── Depends on: TrendMonitor enhancements
-  ├── Risk: MEDIUM (convergence_score algorithm tuning)
+Phase 3: AttentionCollector
+  ├── Forward pre-hook + post-hook on MHA modules
+  ├── Entropy, sparsity, max_weight, confidence, inter-head similarity
+  ├── FlashAttention graceful degradation
+  ├── Depends on: Phase 1 (utils), Phase 2 (TrendMonitor.check_attention)
+  ├── Risk: MEDIUM (FlashAttention interaction, hook lifecycle)
+  └── Effort: ~4-5 hours
+
+Phase 4: QKVCollector
+  ├── Read projection weights, compute SVD-based metrics
+  ├── Condition number, spectral norm, effective rank
+  ├── Depends on: Phase 1 (get_mha_params), Phase 2 (TrendMonitor.check_qkv)
+  ├── Risk: LOW (no hooks, just reads parameters)
   └── Effort: ~3-4 hours
 
-Phase D: METRIC-04 (Batch Size Sensitivity)
-  ├── Depends on: nothing new (standalone collector + new API)
-  ├── Risk: HIGH (new user-facing API, memory management)
-  └── Effort: ~4-5 hours
+Phase 5: Inspector Wiring + Health Report
+  ├── Wire AttentionCollector + QKVCollector into Inspector.__init__() and step()
+  ├── Add attn_interval, qkv_interval, force_math_backend params
+  ├── Extend health report with Transformer section
+  ├── Depends on: Phase 3, Phase 4
+  ├── Risk: LOW (mechanical wiring)
+  └── Effort: ~1-2 hours
 ```
 
-**Recommended order: A → B → C → D**
+**Recommended order: 1 -> 2 -> 3 -> 4 -> 5**
 
 Rationale:
-- A and B are independent — can be done in parallel, but A is simpler so do it first for quick win
-- C depends on TrendMonitor math that B also uses — doing B first validates the TrendMonitor integration pattern
-- D is the most complex and has the most API surface area — do it last when the pattern is well-established
+- Phases 1 and 2 are foundational (utils + TrendMonitor) -- must come first
+- Phase 3 (AttentionCollector) is the highest-risk item due to FlashAttention handling -- do it before QKVCollector to surface issues early
+- Phase 4 (QKVCollector) is the simplest of the two collectors (no hooks) -- quick win after AttentionCollector
+- Phase 5 is mechanical wiring -- always last
 
 ## Key Architectural Decisions
 
-### Decision 1: No new hooks needed
+### Decision 1: AttentionCollector gets its own hooks, separate from HookManager
 
-All 4 features read from existing data sources:
-- METRIC-01: `optimizer.param_groups` (already accessed by ScalarCollector)
-- METRIC-02: `model.named_parameters()` + `.grad` (already accessed by GradientCollector)
-- METRIC-03: loss value passed by user to `step()` (already available)
-- METRIC-04: gradient snapshots from `param.grad` (already available after backward)
+The existing HookManager caches forward activations using the OVERWRITE pattern. AttentionCollector needs different data (attention weights, not layer outputs) and a different hook mechanism (pre-hook + post-hook pair, not just post-hook). Registering AttentionCollector hooks through HookManager would require significant refactoring of HookManager's API.
 
-No backward hooks or new forward hooks are required. The HookManager is unchanged.
+Instead: AttentionCollector manages its own hooks (like WeightGradRatioCollector manages its own backward hooks). This is the established pattern from v1.3.
 
-### Decision 2: TrendMonitor is the shared intelligence layer
+### Decision 2: force_math_backend=True by default
 
-All 4 features feed into TrendMonitor for alerting. This is the right place — TrendMonitor already has rolling windows, slope computation, and alert escalation. Adding correlation rules (e.g., "low LR + high loss = LR too low") is a natural extension.
+FlashAttention silently discards attention weights. For a training observation library, silently losing data is unacceptable. Forcing the math backend ensures data is always captured. The performance cost (~2-3x on attention computation) is acceptable because:
+- Attention is typically 10-20% of total training time
+- Collection happens at interval (default 500 steps), not every step
+- Users can opt out with `force_math_backend=False`
 
-New TrendMonitor correlation rules for v1.3:
-1. `lr_plateau_with_loss_plateau` — LR flat AND loss flat → suggest LR schedule
-2. `wg_ratio_extreme` — weight/gradient ratio outside [1e-4, 1e4] → vanishing/exploding
-3. `low_gradient_snr` — SNR < threshold → suggest larger batch size
-4. `convergence_diverging` — convergence score < -0.5 → training diverging
+### Decision 3: Statistics-only, not full tensor storage
 
-### Decision 3: ConvergenceCollector is a thin bridge, not a brain
+AttentionCollector computes scalar statistics (entropy, sparsity, etc.) and discards the raw attention weight tensors. This follows the v1.3 pattern (W/G ratio stores only the ratio, not the full gradient tensor). For a sequence length S=512 with 12 heads, a single attention matrix is 512*512*12*4 bytes = 12MB. Storing these would quickly exhaust memory.
 
-The convergence math lives in TrendMonitor (reusable, testable). The collector just:
-1. Receives loss from Inspector
-2. Computes EMA
-3. Calls TrendMonitor methods
-4. Writes results to backend
+### Decision 4: QKVCollector reads weights, not activations
 
-This follows the existing pattern where collectors are data movers, not analyzers.
+QKV projection weights are model parameters that persist between steps. Reading them at collection time (like ParamCollector) is simpler and more reliable than hooking into the projection forward pass. The weights change only after optimizer.step(), so reading at step N captures the state after step N-1's update.
 
-### Decision 4: BatchSensitivityCollector manages its own state
+### Decision 5: Reuse existing utils patterns
 
-Unlike other collectors that read from HookManager or model, this collector maintains internal buffers (`_micro_batch_grads`, `_micro_batch_losses`). This is a new pattern but justified — the data is transient (cleared after each `step()`) and specific to this feature.
-
-Memory management: buffers are cleared in `collect()` after computation. No risk of accumulation.
+`list_mha_layers()` already exists and works. Extend it rather than creating a parallel detection mechanism. Similarly, `classify_architecture()` already classifies MHA as `transformer_block` -- refine the classification rather than replace it.
 
 ## TensorBoard Namespace Plan
 
 ```
-train/                           — ScalarCollector (existing + enhanced)
-  lr, lr_delta, lr_change_event  — LR scheduler analysis [METRIC-01]
+attention/                              — AttentionCollector
+  {layer_name}/
+    head_{h}/entropy                    — attention entropy per head
+    head_{h}/sparsity                   — fraction of near-zero weights
+    head_{h}/max_weight                 — peak attention weight
+    head_{h}/confidence                 — head specialization score
+    inter_head_similarity               — mean pairwise cosine similarity
+    dead_heads                          — count of dead heads
 
-wg_ratio/                        — WeightGradRatioCollector [METRIC-02]
-  {param_name}/ratio             — raw weight/gradient ratio
-  {param_name}/log_ratio         — log10 scale
-
-convergence/                     — ConvergenceCollector [METRIC-03]
-  smoothed_loss                  — EMA-smoothed loss
-  score                          — convergence score [-1, +1]
-  oscillation                    — oscillation index
-  est_steps_remaining            — steps to target (optional)
-
-batch_sensitivity/               — BatchSensitivityCollector [METRIC-04]
-  {param_name}/grad_variance     — gradient variance
-  {param_name}/grad_snr          — signal-to-noise ratio
-  loss_variance                  — loss variance
-  effective_batch_size           — estimated effective batch size
+qkv/                                    — QKVCollector
+  {layer_name}/
+    Q/condition_number                  — condition number of Q projection
+    Q/spectral_norm                     — largest singular value
+    Q/effective_rank                    — number of significant singular values
+    Q/weight_norm                       — Frobenius norm
+    K/...                               — same for K
+    V/...                               — same for V
+    out/...                             — same for output projection
+    overall_health                      — composite 0-100 health score
 ```
+
+## Performance Budget
+
+| Component | Overhead at Default Interval | Notes |
+|-----------|------------------------------|-------|
+| AttentionCollector (interval=500) | ~1-3% | Dominated by attention weight capture + entropy computation. If `force_math_backend=True`, 2-3x on attention ops at collection steps only. |
+| QKVCollector (interval=500) | ~0.5-1% | SVD of 768x768 matrix is ~10ms per projection. 4 projections per layer, N layers. |
+| TrendMonitor additions | <0.1% | Scalar comparisons, no tensor ops. |
+| Utils additions | 0% | Called once at init time. |
+| **Total v1.4 overhead** | **~2-4%** | Within the <5% target at default settings. |
 
 ## Risk Assessment
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| Convergence score algorithm is too noisy | Useless predictions | EMA smoothing + require minimum window (20+ points) before reporting |
-| BatchSensitivityCollector memory usage | OOM on large models with many micro-batches | Clear buffers after each step; limit to watched layers only |
-| Weight/grad ratio NaN on zero gradients | Crash or bad data | Guard with `grad_norm > eps` check; skip parameter if grad is None |
-| LR scheduler not attached to optimizer | Silent no-logging | Detect and warn; still log LR from param_groups (works without scheduler) |
-| TrendMonitor alert fatigue | Too many alerts | Existing escalation (INFO → WARN → CRITICAL with consecutive counts) handles this |
+| FlashAttention makes attention weights None | Silent data loss | `force_math_backend=True` by default; one-time warning if False and weights are None |
+| `register_forward_pre_hook` kwargs modification breaks torch.compile | Hook not fired | Test with `torch.compile(model)` in CI; fall back to monkey-patch if needed |
+| Large sequence lengths blow memory during attention capture | OOM | Window to max_seq_len=256; compute stats on GPU, move only scalars to CPU |
+| SVD numerical instability on FP16/BF16 weights | NaN in condition number | `.float()` before SVD (same pattern as W/G ratio collector) |
+| HF models with custom attention (not nn.MHA) | AttentionCollector misses them | Phase 1: detect HF attention modules via `is_hf_model()` + model architecture inspection |
+| Too many MHA layers = too many scalars in TensorBoard | Cluttered dashboard | Default to monitoring only the first N layers (configurable); use `watch()` pattern to limit |
 
 ## Files Summary
 
-**New files (4):**
-- `src/torchinspector/collectors/weight_grad_ratio.py`
-- `src/torchinspector/collectors/convergence.py`
-- `src/torchinspector/collectors/batch_sensitivity.py`
-- `tests/test_collectors/test_lr_scheduler.py`
-- `tests/test_collectors/test_weight_grad_ratio.py`
-- `tests/test_collectors/test_convergence.py`
-- `tests/test_collectors/test_batch_sensitivity.py`
-- `tests/test_monitor_convergence.py`
+**New files (5):**
+- `src/torchinspector/collectors/attention.py` -- AttentionCollector
+- `src/torchinspector/collectors/qkv.py` -- QKVCollector
+- `tests/test_collectors/test_attention.py`
+- `tests/test_collectors/test_qkv.py`
+- `tests/test_monitor_transformer.py`
 
-**Modified files (4):**
-- `src/torchinspector/collectors/scalar.py` — LR delta + event detection
-- `src/torchinspector/collectors/__init__.py` — add 3 new collectors to `__all__`
-- `src/torchinspector/inspector.py` — wire 3 new collectors + 2 new API methods
-- `src/torchinspector/monitor.py` — add convergence_score, oscillation_index, estimated_steps_to_target, new correlation rules
+**Modified files (5):**
+- `src/torchinspector/utils.py` -- add `list_transformer_layers()`, `get_mha_params()`, extend `classify_architecture()`
+- `src/torchinspector/monitor.py` -- add `check_attention()`, `check_qkv()`, 3 new correlation rules, extend `report()`
+- `src/torchinspector/collectors/__init__.py` -- add AttentionCollector, QKVCollector to `__all__`
+- `src/torchinspector/inspector.py` -- wire 2 new collectors, add `attn_interval`, `qkv_interval`, `force_math_backend` params
+- `src/torchinspector/hooks.py` -- no changes needed (AttentionCollector manages its own hooks)
 
 **Unchanged files:**
-- `src/torchinspector/hooks.py` — no changes
-- `src/torchinspector/backends/tensorboard.py` — no changes (existing write_scalar/write_histogram suffice)
-- All existing collectors — no changes
+- `src/torchinspector/backends/tensorboard.py` -- existing `write_scalar` and `write_image` methods suffice
+- All existing collectors -- no changes
+- `src/torchinspector/export.py` -- no changes
 
 ---
-*Architecture research for: v1.3 Universal Monitoring Enhancement*
+
+*Architecture research for: v1.4 Transformer Analysis*
 *Researched: 2026-06-15*

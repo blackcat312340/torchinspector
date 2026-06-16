@@ -1,7 +1,7 @@
 # Stack Research
 
 **Domain:** PyTorch Training Observation Library
-**Researched:** 2026-06-08 (initial), 2026-06-15 (v1.3 monitoring update)
+**Researched:** 2026-06-08 (initial), 2026-06-15 (v1.3 monitoring update), 2026-06-16 (v1.4 Transformer analysis)
 **Confidence:** HIGH
 
 ## Recommended Stack
@@ -278,18 +278,221 @@ Decision: Use numpy for v1.3. If users need richer convergence models (multi-exp
 
 ---
 
+## v1.4 Transformer Analysis Stack
+
+**Goal:** Add Transformer-specific analysis — attention weight monitoring, head health checks, and Q/K/V matrix numerical stability analysis.
+
+### No New Dependencies
+
+**Total new dependencies: 0.** All v1.4 APIs are in PyTorch 2.0+ or existing dependencies. This is consistent with the v1.3 pattern.
+
+| What You Might Expect | Why Not Needed |
+|----------------------|----------------|
+| `transformer_lens` | Research tool for mechanistic interpretability; wraps entire models, conflicts with hook-based architecture; too heavy for training observation |
+| `bertviz` | Visualization-only library; TorchInspector already renders to TensorBoard |
+| `einops` | Not needed — tensor reshaping for multi-head is simple `.reshape()` / `.transpose()` |
+| `scipy` | `torch.linalg` covers SVD, condition number; numpy covers entropy statistics |
+| `torch-pruning` | Pruning library, not monitoring; head health checks are diagnostic only |
+
+### New PyTorch APIs to Use
+
+All available in PyTorch 2.0+. Verified via Context7 (`/pytorch/pytorch`, `/websites/pytorch_2_12`).
+
+| API | Version | Purpose | Why |
+|-----|---------|---------|-----|
+| `torch.linalg.cond` | 2.0+ | Condition number of Q/K/V matrices | Detects ill-conditioned projections before they cause NaN gradients |
+| `torch.linalg.svdvals` | 2.0+ | Singular value distribution | More efficient than full SVD when only values needed (no U/Vh) |
+| `torch.nn.attention.sdpa_kernel` | 2.0+ | Force MATH backend for SDPA | Flash/Efficient backends skip attention weight materialization — cannot hook them |
+| `torch.nn.attention.SDPBackend` | 2.0+ | Enum for SDPA backend selection | `SDPBackend.MATH` guarantees full attention matrix computation |
+| `nn.MultiheadAttention` hook | 2.0+ | Capture attention weights via `register_forward_hook` | Output tuple `(attn_output, attn_output_weights)` — set `need_weights=True, average_attn_weights=False` |
+| `nn.MultiheadAttention.in_proj_weight` | 2.0+ | Access Q/K/V projection weights | Shape `(3*embed_dim, embed_dim)` — split into Q/K/V slices |
+
+### Existing Stack Leverage Points
+
+| Existing Component | How v1.4 Uses It |
+|-------------------|------------------|
+| `TrendMonitor.check_wgr` pattern | Add `check_attention` following same multi-scale window + slope detection pattern |
+| `TrendMonitor.correlation_check` | Add rules: attention_collapse + dead_heads, qkv_ill_conditioned + gradient_exploding |
+| `HookManager` overwrite pattern | AttentionCollector reuses same pattern — latest attention weights cached per MHA layer |
+| `ExplainCollector._capture_native_attention` | Reference pattern for MHA hook + need_weights=True + average_attn_weights=False |
+| `ExplainCollector._capture_hf_attention` | Reference pattern for HuggingFace output_attentions=True |
+| `WeightGradRatioCollector` backward hook pattern | Reuse for Q/K/V gradient norm caching during backward pass |
+| `list_mha_layers` in utils.py | Already detects `nn.MultiheadAttention` — extend to detect `nn.TransformerEncoderLayer` / `nn.TransformerDecoderLayer` children |
+| `is_hf_model` in utils.py | Routes attention capture to HF-specific path (output_attentions=True) |
+| `TensorBoardBackend.write_scalar` | Attention stats (entropy, collapse ratio, condition numbers) logged as scalars |
+| `TensorBoardBackend.write_histogram` | Q/K/V singular value distributions logged as histograms |
+| `TensorBoardBackend.write_image` | Attention heatmaps rendered same way as existing feature maps |
+
+### SDPA-Aware Attention Capture (Critical Pattern)
+
+**Problem:** PyTorch 2.0+ dispatches `F.scaled_dot_product_attention` to Flash Attention or Efficient Attention backends, which do NOT compute the full N×N attention weight matrix. Hooks on `nn.MultiheadAttention` receive `None` for attention weights.
+
+**Solution:** Use `sdpa_kernel(SDPBackend.MATH)` context manager to force the math-based path ONLY during the attention capture pass. Normal training runs at full speed.
+
+```python
+from torch.nn.attention import sdpa_kernel, SDPBackend
+
+# Only force MATH backend during capture passes (every N steps)
+if step % capture_interval == 0:
+    with sdpa_kernel(SDPBackend.MATH):
+        output = model(input_tensor)
+```
+
+**When to force:** Only at `log_interval` steps. All other steps use default SDPA dispatch (Flash/Efficient) — zero overhead on non-capture steps.
+
+**Detection:** Check if `attn_output_weights is None` after hook — if None, SDPA skipped materialization. Log a warning and either skip or re-run with MATH backend.
+
+### Q/K/V Projection Access
+
+**Problem:** `nn.MultiheadAttention` computes Q/K/V internally via `in_proj_weight`. Need to capture the projected Q, K, V tensors for condition number analysis.
+
+**Two approaches:**
+
+```python
+# Method A: Hook on MHA input (simpler, works for self-attention and cross-attention)
+def qkv_pre_hook(module, args):
+    # args = (query, key, value, ...)
+    q, k, v = args[0], args[1], args[2]
+    # Store for analysis
+    return None  # Don't modify
+
+# Method B: Manual projection from in_proj_weight (for weight-level analysis)
+# in_proj_weight shape: (3*embed_dim, embed_dim)
+# Split: Q = in_proj_weight[:embed_dim], K = in_proj_weight[embed_dim:2*embed_dim], V = in_proj_weight[2*embed_dim:]
+```
+
+**Recommendation:** Method A is simpler and captures the actual Q/K/V tensors flowing through the model. Method B gives access to the learned projection matrices for weight-level condition number analysis. Use both: Method A for runtime tensor monitoring, Method B for weight health checks.
+
+### Attention Entropy for Head Health
+
+**Metric:** Shannon entropy of attention distributions per head.
+
+```
+H = -sum(p_ij * log(p_ij))  over j (key positions)
+```
+
+- Low entropy (H near 0): Head is highly focused — potentially collapsed or overly specialized
+- High entropy (H near log(seq_len)): Head is diffuse — potentially dead or averaging
+- Medium entropy: Healthy, selective attention
+
+**Thresholds (need tuning per model type):**
+- `H < 0.1 * log(seq_len)`: Collapsed head (attends to single position)
+- `H > 0.95 * log(seq_len)`: Uniform head (no selectivity — dead)
+- Head-to-head cosine similarity > 0.95: Redundant heads
+
+### Q/K/V Condition Number Monitoring
+
+**Metric:** `torch.linalg.cond(weight_matrix)` for each of Q, K, V projection matrices.
+
+- Condition number = sigma_max / sigma_min
+- Near 1.0: Well-conditioned (ideal)
+- 10-100: Normal for trained models
+- 1000+: Ill-conditioned — numerical instability risk
+- 10000+: Critical — gradient explosion/NaN imminent
+
+**Also track:** `torch.linalg.svdvals(weight_matrix)` as histogram for distribution shape. Skewed singular value distribution indicates low-rank behavior and potential information bottleneck.
+
+### New Collector Architecture
+
+**Collector 1: `attention.py` — AttentionCollector**
+
+Responsibility: Capture attention weights, compute per-head entropy, detect collapsed/dead/redundant heads.
+
+Hooks:
+- Forward hook on each `nn.MultiheadAttention` module (native models)
+- HF path uses `output_attentions=True` (existing pattern in ExplainCollector)
+
+Metrics logged:
+- `attention/{layer}/head_{i}/entropy` — Shannon entropy per head
+- `attention/{layer}/head_{i}/max_weight` — Max attention weight (spike detection)
+- `attention/{layer}/collapsed_heads` — Count of heads with entropy < threshold
+- `attention/{layer}/dead_heads` — Count of heads with entropy > threshold
+- `attention/{layer}/redundant_pairs` — Count of head pairs with cosine similarity > 0.95
+
+**Collector 2: `qkv_analysis.py` — QKVCollector**
+
+Responsibility: Monitor Q/K/V projection matrix numerical stability and gradient health.
+
+Hooks:
+- Forward pre-hook on MHA modules to capture Q/K/V inputs
+- Forward hook on MHA modules to access `in_proj_weight` for condition number
+- Backward hook on MHA modules to capture Q/K/V gradient norms (reuse WeightGradRatioCollector pattern)
+
+Metrics logged:
+- `qkv/{layer}/Q/condition_number` — torch.linalg.cond of Q projection
+- `qkv/{layer}/K/condition_number` — torch.linalg.cond of K projection
+- `qkv/{layer}/V/condition_number` — torch.linalg.cond of V projection
+- `qkv/{layer}/Q/singular_values` — Histogram via torch.linalg.svdvals
+- `qkv/{layer}/K/singular_values` — Histogram via torch.linalg.svdvals
+- `qkv/{layer}/V/singular_values` — Histogram via torch.linalg.svdvals
+- `qkv/{layer}/Q/grad_norm` — Gradient norm for Q projection weights
+- `qkv/{layer}/K/grad_norm` — Gradient norm for K projection weights
+- `qkv/{layer}/V/grad_norm` — Gradient norm for V projection weights
+
+### TrendMonitor Extensions
+
+New method: `check_attention(name, entropy_value, step)` — follows `check_wgr` pattern with multi-scale windows.
+
+New correlation rules:
+1. `attention_collapse + qkv_ill_conditioned` → CRITICAL
+2. `dead_heads + convergence_slow` → WARN
+3. `qkv_condition_number_high + gradient_exploding` → CRITICAL
+
+### Utils Extensions
+
+New function: `list_transformer_layers(model)` — detects `nn.TransformerEncoderLayer`, `nn.TransformerDecoderLayer`, and their children containing `nn.MultiheadAttention`. Returns list of (layer_name, mha_name) tuples.
+
+New function: `get_mha_num_heads(module)` — extracts `num_heads` from `nn.MultiheadAttention` module for per-head metric naming.
+
+Extend `classify_architecture` — add detection for `nn.TransformerEncoderLayer`, `nn.TransformerDecoderLayer` as `transformer_block` type with higher priority than current MHA-only detection.
+
+### Summary: v1.4 Dependency Impact
+
+| Component | New Dependencies | Reason |
+|-----------|-----------------|--------|
+| AttentionCollector | **None** | `register_forward_hook` on MHA, `sdpa_kernel` context manager — all in PyTorch 2.0+ |
+| QKVCollector | **None** | `torch.linalg.cond`, `torch.linalg.svdvals` — in PyTorch 2.0+ |
+| TrendMonitor extensions | **None** | Same rolling-window + slope pattern as existing check_wgr |
+| Utils extensions | **None** | isinstance checks on nn.Module subclasses |
+
+**Total new dependencies: 0.** Consistent with v1.3 pattern — extend capabilities using existing stack.
+
+---
+
 ## Sources
 
 - [PyTorch Docs: torch.utils.tensorboard](https://pytorch.org/docs/stable/tensorboard.html) — SummaryWriter API, add_graph, add_histogram
 - [PyTorch Docs: forward hooks](https://pytorch.org/docs/stable/generated/torch.nn.modules.module.register_module_forward_hook.html) — Hook registration and lifecycle
 - [PyTorch Docs: LR Scheduler](https://pytorch.org/docs/stable/optim.html) — `get_last_lr()`, `get_lr()`, scheduler composition
+- [PyTorch Docs: nn.MultiheadAttention](https://pytorch.org/docs/stable/generated/torch.nn.MultiheadAttention.html) — `need_weights`, `average_attn_weights`, `in_proj_weight`
+- [PyTorch Docs: torch.linalg.cond](https://pytorch.org/docs/stable/generated/torch.linalg.cond.html) — Condition number computation
+- [PyTorch Docs: torch.linalg.svdvals](https://pytorch.org/docs/stable/generated/torch.linalg.svdvals.html) — Singular values without full SVD
+- [PyTorch Docs: sdpa_kernel](https://pytorch.org/docs/stable/generated/torch.nn.attention.sdpa_kernel.html) — SDPA backend selection
+- [PyTorch Docs: SDPBackend](https://pytorch.org/docs/stable/generated/torch.nn.attention.SDPBackend.html) — Backend enum (MATH, FLASH_ATTENTION, etc.)
+- [PyTorch Notes: Numerical Accuracy](https://pytorch.org/docs/stable/notes/numerical_accuracy.html) — SVD extremal values, condition number guidance
 - [Poetry Docs](https://python-poetry.org/docs/) — Modern Python packaging with src layout
 - [ruff](https://docs.astral.sh/ruff/) — Unified Python linter/formatter
 - [AimStack](https://aimstack.io/) — TensorBoard alternative for comparison
 - [Netron](https://github.com/lutzroeder/netron) — Model structure visualizer
 - [McCandlish et al. (2018)](https://arxiv.org/abs/1812.06162) — "An Empirical Model of Large-Batch Training" — gradient noise scale / critical batch size
 - [numpy polyfit docs](https://numpy.org/doc/stable/reference/generated/numpy.polyfit.html) — Polynomial fitting for convergence analysis
+- Context7: `/pytorch/pytorch` and `/websites/pytorch_2_12` — Verified API availability for v1.4
 
 ---
+
+## Confidence Assessment
+
+| Area | Confidence | Notes |
+|------|------------|-------|
+| SDPA workaround | HIGH | `sdpa_kernel(SDPBackend.MATH)` is documented API, verified via Context7 |
+| Q/K/V access via hooks | HIGH | `register_forward_hook` on MHA returns (output, weights) tuple — verified |
+| `torch.linalg.cond` / `svdvals` | HIGH | Available since PyTorch 2.0, verified via Context7 |
+| No new dependencies | HIGH | All APIs are in torch 2.0+ or existing deps |
+| Attention entropy thresholds | MEDIUM | Standard metric but exact thresholds need tuning — will vary by model/task |
+| `register_full_qkv_hook` | LOW | Does NOT appear in PyTorch 2.12 docs — use standard `register_forward_hook` instead |
+| Head redundancy cosine similarity threshold | MEDIUM | 0.95 is standard in literature but needs validation per model type |
+
+---
+
 *Stack research for: PyTorch Training Observation Library*
-*Initial: 2026-06-08 | v1.3 update: 2026-06-15*
+*Initial: 2026-06-08 | v1.3 update: 2026-06-15 | v1.4 update: 2026-06-16*
