@@ -269,6 +269,39 @@ class TrendMonitor:
                         ))
                         break
 
+        # Rule: gns_high + convergence_slow → WARN
+        gns_keys = [
+            k for k in metrics
+            if "batch_sensitivity/gns" in k
+            and not k.endswith((":short", ":medium", ":long"))
+        ]
+        if self._last_convergence_score is not None and self._last_convergence_score < 40:
+            for k in gns_keys:
+                gns_slope = self._compute_slope(self._windows.get(k, []))
+                if gns_slope is not None and gns_slope > 0:
+                    alerts.append((
+                        "gns_high_convergence_slow",
+                        AlertLevel.WARN,
+                        "High gradient noise + slow convergence — "
+                        "consider increasing batch size",
+                    ))
+                    break
+
+        # Rule: weight_grad_extreme + convergence_slow → CRITICAL (D-10)
+        if self._last_convergence_score is not None and self._last_convergence_score < 40:
+            for k in wgr_keys:
+                win = self._windows.get(k, [])
+                if win:
+                    latest = win[-1]
+                    if latest > 6.0 or latest < -6.0:
+                        alerts.append((
+                            "weight_grad_extreme_convergence_slow",
+                            AlertLevel.CRITICAL,
+                            "Extreme W/G ratio + slow convergence — "
+                            "possible training instability",
+                        ))
+                        break
+
         return alerts
 
     def check_wgr(self, name: str, log_ratio: float, step: int) -> AlertLevel:
@@ -356,6 +389,92 @@ class TrendMonitor:
             both_negative = short_slope < 0 and long_slope < 0
             if not both_positive and not both_negative and count < 5:
                 # No sustained trend — reset
+                self._alert_counts[alert_key] = 0
+                level = AlertLevel.OK
+
+        self._current_alerts[alert_key] = level
+        return level
+
+    def check_bsz(self, gns_value: float, step: int) -> AlertLevel:
+        """Check gradient noise scale for anomaly detection.
+
+        Feeds three sub-windows (short/medium/long) and detects whether
+        the GNS is consistently rising (noise increasing — suggest larger
+        batch) or consistently falling (potentially unstable).
+
+        Args:
+            gns_value: Current gradient noise scale value.
+            step: Current training step.
+
+        Returns:
+            Current ``AlertLevel`` for this BSZ metric.
+        """
+        # Feed three sub-windows
+        for suffix, size in [
+            (":short", _SHORT_WINDOW),
+            (":medium", _MEDIUM_WINDOW),
+            (":long", _LONG_WINDOW),
+        ]:
+            key = f"batch_sensitivity/gns{suffix}"
+            win = self._windows[key]
+            win.append(gns_value)
+            if len(win) > size:
+                win.pop(0)
+
+        # Also maintain unsuffixed window for correlation_check lookups
+        base_key = "batch_sensitivity/gns"
+        base_win = self._windows[base_key]
+        base_win.append(gns_value)
+        if len(base_win) > self._window_size:
+            base_win.pop(0)
+
+        # Compute slopes for short and long windows
+        short_key = "batch_sensitivity/gns:short"
+        long_key = "batch_sensitivity/gns:long"
+        short_slope = self._compute_slope(self._windows.get(short_key, []))
+        long_slope = self._compute_slope(self._windows.get(long_key, []))
+
+        alert_key = "bsz"
+
+        # Trend detection logic
+        if short_slope is not None and long_slope is not None:
+            if short_slope > 0 and long_slope > 0:
+                # Both positive → noise increasing
+                self._alert_counts[alert_key] += 1
+            elif short_slope < 0 and long_slope < 0:
+                # Both negative → noise dropping fast
+                self._alert_counts[alert_key] += 1
+            else:
+                # Mixed signal → decay count
+                self._alert_counts[alert_key] = max(0, self._alert_counts[alert_key] - 1)
+        elif short_slope is not None:
+            if short_slope > 0 or short_slope < 0:
+                self._alert_counts[alert_key] += 1
+
+        count = self._alert_counts[alert_key]
+
+        # Escalation thresholds (mirrors check_wgr)
+        if count >= 20 and short_slope is not None and long_slope is not None:
+            if abs(short_slope) > abs(long_slope) * 1.5:
+                level = AlertLevel.CRITICAL
+            elif count >= 10:
+                level = AlertLevel.WARN
+            elif count >= 5:
+                level = AlertLevel.INFO
+            else:
+                level = AlertLevel.OK
+        elif count >= 10:
+            level = AlertLevel.WARN
+        elif count >= 5:
+            level = AlertLevel.INFO
+        else:
+            level = AlertLevel.OK
+
+        # Reset on flat/mixed when count < 5
+        if short_slope is not None and long_slope is not None:
+            both_positive = short_slope > 0 and long_slope > 0
+            both_negative = short_slope < 0 and long_slope < 0
+            if not both_positive and not both_negative and count < 5:
                 self._alert_counts[alert_key] = 0
                 level = AlertLevel.OK
 
