@@ -203,6 +203,25 @@ class TrendMonitor:
                         ))
                         break  # One alert per rule is enough
 
+        # Rule: lr_spike anomaly active AND loss stagnant → WARN (INT-02 partial, D-08)
+        lr_anomaly_keys = [k for k in metrics if "lr_anomaly" in k or "lr/anomaly" in k]
+        loss_keys_for_lr = [
+            k for k in loss_keys_raw
+            if not k.endswith((":short", ":medium", ":long"))
+        ]
+        for ak in lr_anomaly_keys:
+            if metrics.get(ak, 0) > 0:  # anomaly active (spike = 1.0)
+                for lk in loss_keys_for_lr:
+                    loss_slope = self._compute_slope(self._windows.get(lk, []))
+                    if loss_slope is not None and abs(loss_slope) < 0.001:
+                        alerts.append((
+                            "lr_spike_loss_stagnant",
+                            AlertLevel.WARN,
+                            "LR anomaly + loss plateau — check scheduler configuration",
+                        ))
+                        break
+                break  # One alert per rule
+
         # Rule: convergence_slow AND gradient_declining → WARN
         grad_keys_filtered = [k for k in metrics if "gradient" in k and "norm" in k]
         if self._last_convergence_score is not None and self._last_convergence_score < 40:
