@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
+from collections.abc import Generator
 
 from torch import nn
 
@@ -148,6 +150,68 @@ def is_hf_model(model: nn.Module) -> bool:
         True if ``hasattr(model, 'config')``, False otherwise.
     """
     return hasattr(model, "config")
+
+
+def list_transformer_layers(
+    model: nn.Module,
+) -> list[tuple[str, nn.MultiheadAttention]]:
+    """Return (name, module) pairs for all MultiheadAttention layers.
+
+    Args:
+        model: The PyTorch model to inspect.
+
+    Returns:
+        Sorted list of (name, module) tuples for MHA layers.
+        Excludes the root module (name ``""``).
+    """
+    result: list[tuple[str, nn.MultiheadAttention]] = []
+    for name, module in model.named_modules():
+        if name == "":
+            continue
+        if isinstance(module, nn.MultiheadAttention):
+            result.append((name, module))
+    return sorted(result, key=lambda x: x[0])
+
+
+def is_transformer_model(model: nn.Module) -> bool:
+    """Return True if the model contains any MultiheadAttention layers.
+
+    Args:
+        model: The PyTorch model to check.
+
+    Returns:
+        True if any ``nn.MultiheadAttention`` module found.
+    """
+    for _, module in model.named_modules():
+        if isinstance(module, nn.MultiheadAttention):
+            return True
+    return False
+
+
+def force_math_sdpa(
+    enabled: bool = True,
+) -> contextlib.AbstractContextManager:
+    """Context manager that forces math SDPA backend during attention collection.
+
+    When ``enabled=True``, wraps ``torch.nn.attention.sdpa_kernel(SDPBackend.MATH)``
+    to ensure attention weights are extractable even when FlashAttention is active.
+    When ``enabled=False``, returns a no-op context manager.
+
+    Args:
+        enabled: If True (default), force math backend. If False, no-op.
+
+    Returns:
+        A context manager for SDPA backend control.
+    """
+    if not enabled:
+        return contextlib.nullcontext()
+
+    try:
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+    except ImportError:
+        return contextlib.nullcontext()
+
+    return sdpa_kernel(SDPBackend.MATH)
 
 
 # Recognized activation types for dead neuron / saturation detection.
