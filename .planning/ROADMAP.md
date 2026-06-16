@@ -8,7 +8,7 @@
 
 ## Phases
 
-- [ ] **Phase 15: Utils + TrendMonitor Extensions** — Foundation: attention-aware TrendMonitor checks, correlation rules, FlashAttention compat
+- [x] **Phase 15: Utils + TrendMonitor Extensions** — ✅ Complete (2026-06-15)
 - [ ] **Phase 16: AttentionCollector** — Per-head entropy, weight stats, histograms, head health detection
 - [ ] **Phase 17: QKVCollector** — Condition number, spectral norm, effective rank, SVD distribution
 - [ ] **Phase 18: Inspector Wiring + Health Report + Integration** — `transformer=True` flag, unified alerting, Transformer health report section
@@ -20,14 +20,14 @@
 **Depends on**: Phase 14 (existing TrendMonitor with 4 check methods, 6 correlation rules)
 **Requirements**: ATTN-04, INT-08
 **Success Criteria** (what must be TRUE):
-  1. TrendMonitor can track attention entropy across 3 time windows (10/50/200 steps) and detect gradual degradation
-  2. TrendMonitor includes attention-aware check methods (`check_attention_entropy`, `check_head_collapse`, `check_head_dead`, `check_head_redundancy`) ready for collectors to call
-  3. New correlation rule definitions exist: attention collapse + slow convergence; QKV condition anomaly + gradient anomaly (wired end-to-end in Phase 18)
-  4. FlashAttention models automatically fall back to math SDPA backend during attention weight collection without user intervention
+  1. ✅ TrendMonitor can track attention entropy across 3 time windows (10/50/200 steps) and detect gradual degradation
+  2. ✅ TrendMonitor includes attention-aware check methods (`check_attention`, `check_qkv`) ready for collectors to call
+  3. ✅ New correlation rule definitions exist: attention collapse + slow convergence; QKV condition anomaly + gradient anomaly
+  4. ✅ FlashAttention models automatically fall back to math SDPA backend during attention weight collection
 **Plans**: 2 plans
 Plans:
-- [ ] 15-01-PLAN.md — TrendMonitor check_attention() + check_qkv() + correlation rules
-- [ ] 15-02-PLAN.md — Transformer utils (list_transformer_layers, is_transformer_model, force_math_sdpa) + classify_architecture extension
+- [x] 15-01-PLAN.md — TrendMonitor check_attention() + check_qkv() + correlation rules
+- [x] 15-02-PLAN.md — Transformer utils (list_transformer_layers, is_transformer_model, force_math_sdpa) + classify_architecture extension
 
 ### Phase 16: AttentionCollector
 **Goal**: Users can observe per-head attention behavior and the system detects unhealthy heads
