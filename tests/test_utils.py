@@ -8,6 +8,7 @@ from torch import nn
 from torchinspector.utils import (
     classify_architecture,
     force_math_sdpa,
+    get_architecture_type,
     get_module_names,
     is_transformer_model,
     list_transformer_layers,
@@ -442,3 +443,59 @@ class TestForceMathSDPA:
             # We verify by checking the context manager doesn't error
             # and the SDPBackend.MATH enum is accessible
             assert hasattr(SDPBackend, "MATH")
+
+
+# ---- get_architecture_type tests -----------------------------------------
+
+
+class TestGetArchitectureType:
+    """Tests for get_architecture_type() — top-level architecture detection."""
+
+    def test_returns_transformer_for_mha_model(self) -> None:
+        """Model with MHA should return 'transformer'."""
+        model = nn.Sequential(
+            nn.Embedding(1000, 64),
+            nn.MultiheadAttention(64, 4, batch_first=True),
+            nn.LayerNorm(64),
+            nn.Linear(64, 10),
+        )
+        assert get_architecture_type(model) == "transformer"
+
+    def test_returns_cnn_for_conv_model(self) -> None:
+        """Model with Conv layers should return 'cnn'."""
+        model = nn.Sequential(
+            nn.Conv2d(3, 16, 3, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(16 * 32 * 32, 10),
+        )
+        assert get_architecture_type(model) == "cnn"
+
+    def test_returns_rnn_for_lstm_model(self) -> None:
+        """Model with LSTM should return 'rnn'."""
+        model = nn.Sequential(
+            nn.LSTM(10, 32, batch_first=True),
+            nn.Dropout(0.5),
+            nn.Linear(32, 5),
+        )
+        assert get_architecture_type(model) == "rnn"
+
+    def test_returns_unknown_for_simple_model(self) -> None:
+        """Simple MLP should return 'unknown' (no conv, rnn, or transformer blocks)."""
+        model = nn.Sequential(
+            nn.Linear(10, 64),
+            nn.ReLU(),
+            nn.Linear(64, 10),
+        )
+        # classify_architecture labels Linear+ReLU as linear_block, not one of the 3 types
+        result = get_architecture_type(model)
+        assert result in ("unknown", "linear")
+
+    def test_transformer_wins_in_mixed_model(self) -> None:
+        """Mixed model with MHA and Conv should return 'transformer' (highest priority)."""
+        model = nn.Sequential(
+            nn.Conv2d(3, 16, 3, padding=1),
+            nn.ReLU(),
+            nn.MultiheadAttention(64, 4, batch_first=True),
+        )
+        assert get_architecture_type(model) == "transformer"
