@@ -1,51 +1,39 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3
-milestone_name: 通用监控增强
-status: milestone_complete
-last_updated: "2026-06-15T17:00:00.000Z"
+milestone: v1.4
+milestone_name: Transformer Analysis
+status: planning
+last_updated: "2026-06-15T18:00:00.000Z"
 last_activity: 2026-06-15
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 11
-  completed_plans: 11
-  percent: 100
-milestone_archived: true
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # State: TorchInspector
 
 **Last updated:** 2026-06-15
 
-## v1.3 — Complete ✅
+## v1.4 — Planning
 
-**Status:** Shipped 2026-06-15
+**Status:** Defining requirements
 
-| Phase | Name | Status | Requirements |
-|-------|------|--------|--------------|
-| 11 | Convergence Trajectory Analysis | Pending | CVG-01..05, INT-01 (partial) |
-| 12 | Weight/Gradient Ratio Monitoring | ✅ Complete | WGR-01..04 |
-| 13 | Learning Rate Scheduler Analysis | ✅ Complete | LR-01..03, INT-01 (partial), INT-02 (partial) |
-| 14 | Batch Sensitivity + Integration | ✅ Complete | BSZ-01..05, INT-01..04 |
+## Current Position
 
-**Requirements:** 21/21 mapped (100% coverage)
-
-## Milestone History
-
-| Milestone | Phases | Plans | Tests | Status |
-|-----------|--------|-------|-------|--------|
-| v1.0 | 6 | 23 | 155 | Shipped |
-| v1.1 | 2 (Phase 9 skipped) | 4 | — | Shipped |
-| v1.2 | 1 | 4 | 211 | Shipped |
-| v1.3 | 4 | 11 | 357 | Shipped |
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-15 — Milestone v1.4 started
 
 ## Project Reference
 
 See: .planning/PROJECT.md (updated 2026-06-15)
 
 **Core value:** Make PyTorch training loops observable through a clean API
-**Current focus:** v1.3 complete — ready for next milestone
+**Current focus:** v1.4 Transformer Analysis
 
 ## Decisions Log
 
@@ -59,10 +47,4 @@ See: .planning/PROJECT.md (updated 2026-06-15)
 | 2026-06-15 | v1.3 order: CVG->WGR->LR->BSZ | Research recommendation: build foundation first |
 | 2026-06-15 | 3 new collectors + 1 modification | Architecture: no new hooks needed, backend unchanged |
 | 2026-06-15 | INT-01/INT-02 split across phases | Incremental integration: partial in Phase 11/13, full in Phase 14 |
-
-## Current Position
-
-Phase: v1.3 Complete
-Plan: All 4 phases shipped
-Status: v1.3 milestone complete — 15 plans, 357 tests
-Last activity: 2026-06-15
+| 2026-06-15 | v1.4: Transformer Analysis | User preference: model analysis depth |

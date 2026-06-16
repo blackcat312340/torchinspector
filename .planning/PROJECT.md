@@ -46,6 +46,16 @@ Make the internal state of PyTorch training loops observable through a clean, mi
 
 **Architecture:** 4 new collectors (convergence.py, weight_grad_ratio.py, lr_scheduler.py, batch_sensitivity.py), TrendMonitor expanded with 4 check methods and 6 correlation rules.
 
+## Current Milestone: v1.4 Transformer Analysis
+
+**Goal:** 为 Transformer 模型提供深度训练可观测性，包括注意力机制分析、Head 健康检查和数值稳定性监控。
+
+**Target features:**
+- 注意力权重分析 — 记录每层 attention 权重分布，检测 attention 坍塌或过于分散
+- 层间依赖可视化 — 可视化 token 间的 attention 关系，发现异常连接模式
+- Attention Head 健康检查 — 检测 head 死亡、冗余 head、head 专业化程度
+- Q/K/V 矩阵分析 — 追踪条件数、奇异值分布，检测数值不稳定
+
 ### Out of Scope
 
 - Real-time web dashboard — TensorBoard handles UI
@@ -83,4 +93,4 @@ v1.3 added 4 new collectors: convergence.py, weight_grad_ratio.py, lr_scheduler.
 This document evolves at phase transitions and milestone boundaries.
 
 ---
-*Last updated: 2026-06-15 after v1.3 milestone*
+*Last updated: 2026-06-15 — v1.4 Transformer Analysis milestone started*
