@@ -366,3 +366,28 @@ def classify_architecture(
         i += 1
 
     return result
+
+
+def get_architecture_type(model: nn.Module) -> str:
+    """Return the top-level architecture type of the model.
+
+    Inspects the block types returned by :func:`classify_architecture` and
+    returns the highest-priority type found.
+
+    Priority order: ``"transformer"`` > ``"cnn"`` > ``"rnn"`` > ``"unknown"``.
+
+    Args:
+        model: The PyTorch model to classify.
+
+    Returns:
+        One of ``"transformer"``, ``"cnn"``, ``"rnn"``, or ``"unknown"``.
+    """
+    blocks = classify_architecture(model)
+    block_types = {bt for bt, _ in blocks.values()}
+    if "transformer_block" in block_types:
+        return "transformer"
+    if "conv_block" in block_types:
+        return "cnn"
+    if "rnn_block" in block_types:
+        return "rnn"
+    return "unknown"
