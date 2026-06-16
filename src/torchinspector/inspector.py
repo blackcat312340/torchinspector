@@ -21,6 +21,7 @@ from torchinspector.collectors.rnn import RNNCollector
 from torchinspector.collectors.scalar import ScalarCollector
 from torchinspector.collectors.weight import WeightCollector
 from torchinspector.collectors.weight_grad_ratio import WeightGradRatioCollector
+from torchinspector.collectors.lr_scheduler import LRCollector
 from torchinspector.export import ONNXExporter
 from torchinspector.hooks import HookManager
 from torchinspector.monitor import TrendMonitor
@@ -66,6 +67,7 @@ class Inspector:
         rnn_interval: int = 100,
         residual_interval: int = 100,
         health_report_interval: int = 500,
+        lr_warmup_steps: int = 100,
     ) -> None:
         """Initialize Inspector with model, optimizer, and logging config.
 
@@ -93,6 +95,8 @@ class Inspector:
                 (default 100).
             residual_interval: Steps between residual flow analyses
                 (default 100).
+            lr_warmup_steps: Steps to skip LR anomaly detection during
+                warmup (default 100).
 
         Raises:
             TypeError: If model is not nn.Module or optimizer is not Optimizer.
@@ -195,6 +199,13 @@ class Inspector:
             self._monitor,
             log_interval=log_interval,
         )
+        self._lr_collector = LRCollector(
+            optimizer,
+            self._backend,
+            self._monitor,
+            log_interval=log_interval,
+            warmup_steps=lr_warmup_steps,
+        )
         self._onnx_exporter = ONNXExporter(model, self._log_dir)
 
     # -- Public API (10 methods) ------------------------------------------
@@ -222,6 +233,7 @@ class Inspector:
             self._activation_collector.collect(self._step)
             self._gradient_collector.collect(self._step)
             self._weight_grad_ratio_collector.collect(self._step)
+            self._lr_collector.collect(self._step, loss_val=loss_val)
 
         self._feature_map_collector.collect(self._step)
         self._weight_collector.collect(self._step)
@@ -434,6 +446,7 @@ class Inspector:
         """
         if self._closed:
             return
+        self._lr_collector.close()
         self._weight_grad_ratio_collector.close()
         self._hook_manager.remove_all()
         self._backend.close()

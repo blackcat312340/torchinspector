@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from torchinspector.collectors.activation import ActivationCollector
 from torchinspector.collectors.explain import ExplainCollector
+from torchinspector.collectors.lr_scheduler import LRCollector
 from torchinspector.collectors.feature_map import FeatureMapCollector
 from torchinspector.collectors.gradient import GradientCollector
 from torchinspector.collectors.normalization import NormalizationCollector
@@ -17,6 +18,7 @@ from torchinspector.collectors.weight_grad_ratio import WeightGradRatioCollector
 __all__ = [
     "ActivationCollector",
     "ExplainCollector",
+    "LRCollector",
     "FeatureMapCollector",
     "GradientCollector",
     "NormalizationCollector",
