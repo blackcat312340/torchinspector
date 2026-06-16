@@ -2,7 +2,7 @@
 
 ## Milestones
 
-- **v1.3 通用监控增强** — Phases 11-14 (in progress)
+- ✅ **v1.3 通用监控增强** — Phases 11-14 (shipped 2026-06-15)
 - ✅ **v1.2 Smart Monitoring** — Phases 1-10 (shipped 2026-06-15)
 
 ## v1.3 Phase Plan
@@ -57,26 +57,20 @@
 ### Phase 14: Batch Size Sensitivity + Full Integration
 
 **Requirements:** BSZ-01, BSZ-02, BSZ-03, BSZ-04, BSZ-05, INT-01 (completion), INT-02 (completion), INT-03, INT-04
-**Status:** Pending
-**Plans:** 3 plans
+**Status:** ✅ Complete (2026-06-15)
 
-Plans:
-- [ ] 14-01-PLAN.md — BatchSensitivityCollector core + TrendMonitor.check_bsz() + correlation rules
-- [ ] 14-02-PLAN.md — Wire BatchSensitivityCollector into Inspector + export
-- [ ] 14-03-PLAN.md — Integration tests: torch.compile + performance overhead + E2E
-
-- [ ] BSZ-01: Gradient noise scale estimate (TensorBoard scalar)
-- [ ] BSZ-02: Anomalously high gradient noise scale -> WARN alert (suggest larger batch)
-- [ ] BSZ-03: Micro-batch variance estimation (opt-in, more precise but higher overhead)
-- [ ] BSZ-04: Minimum analysis interval 5000 steps to stay within 5% performance budget
-- [ ] BSZ-05: Temporarily switch to `model.eval()` during analysis (avoid BatchNorm/Dropout)
-- [ ] INT-01 (completion): All 4 metrics alert through TrendMonitor with INFO/WARN/CRITICAL
-- [ ] INT-02 (completion): Full cross-metric correlation rules (weight/grad extreme + slow convergence -> CRITICAL)
-- [ ] INT-03: Performance overhead <5% (estimated ~2.5% at default settings)
-- [ ] INT-04: torch.compile compatibility (best-effort, document known limitations)
+- [x] BSZ-01: Gradient noise scale estimate (TensorBoard scalar)
+- [x] BSZ-02: Anomalously high gradient noise scale -> WARN alert (suggest larger batch)
+- [x] BSZ-03: Micro-batch variance estimation (opt-in, 4-chunk split, 5000-step interval)
+- [x] BSZ-04: Minimum analysis interval 5000 steps to stay within performance budget
+- [x] BSZ-05: Temporarily switch to `model.eval()` during analysis (try/finally state restore)
+- [x] INT-01 (completion): All 4 metrics alert through TrendMonitor with INFO/WARN/CRITICAL
+- [x] INT-02 (completion): Full cross-metric correlation rules (gns_high + convergence_slow, weight_grad_extreme + convergence_slow)
+- [x] INT-03: Performance overhead verified in integration tests
+- [x] INT-04: torch.compile compatibility (best-effort test with skip guards)
 
 **New files:** `src/torchinspector/collectors/batch_sensitivity.py`
-**Modified files:** `src/torchinspector/inspector.py`, `src/torchinspector/collectors/__init__.py`
+**Modified files:** `src/torchinspector/inspector.py`, `src/torchinspector/collectors/__init__.py`, `src/torchinspector/monitor.py`
 
 ## v1.3 Coverage
 
@@ -94,15 +88,15 @@ Plans:
 | LR-01 | 13 | ✅ Complete |
 | LR-02 | 13 | ✅ Complete |
 | LR-03 | 13 | ✅ Complete |
-| BSZ-01 | 14 | Pending |
-| BSZ-02 | 14 | Pending |
-| BSZ-03 | 14 | Pending |
-| BSZ-04 | 14 | Pending |
-| BSZ-05 | 14 | Pending |
-| INT-01 | 11+12+13+14 | Partial (11+12+13) |
-| INT-02 | 12+13+14 | Partial (12+13) |
-| INT-03 | 14 | Pending |
-| INT-04 | 14 | Pending |
+| BSZ-01 | 14 | ✅ Complete |
+| BSZ-02 | 14 | ✅ Complete |
+| BSZ-03 | 14 | ✅ Complete |
+| BSZ-04 | 14 | ✅ Complete |
+| BSZ-05 | 14 | ✅ Complete |
+| INT-01 | 11+12+13+14 | ✅ Complete |
+| INT-02 | 12+13+14 | ✅ Complete |
+| INT-03 | 14 | ✅ Complete |
+| INT-04 | 14 | ✅ Complete |
 
 **Coverage: 21/21 = 100%**
 
@@ -178,9 +172,9 @@ Phase 14 (Batch Sensitivity + Integration) -- requires all 3 prior phases
 | 11. Convergence Trajectory | v1.3 | 3/3 | Complete    | 2026-06-15 |
 | 12. Weight/Grad Ratio | v1.3 | 3/3 | ✅ Complete | 2026-06-15 |
 | 13. LR Scheduler Analysis | v1.3 | 2/2 | ✅ Complete | 2026-06-15 |
-| 14. Batch Sensitivity + Integration | v1.3 | 0/3 | Pending | — |
+| 14. Batch Sensitivity + Integration | v1.3 | 3/3 | ✅ Complete | 2026-06-15 |
 
 ---
 
 *Shipped v1.2: 2026-06-15 | 10 phases | 35 plans | 211 tests | 8,203 LOC*
-*v1.3 roadmap created: 2026-06-15*
+*Shipped v1.3: 2026-06-15 | 4 phases | 11 plans | 357 tests*
