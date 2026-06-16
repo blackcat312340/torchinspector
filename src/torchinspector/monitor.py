@@ -302,6 +302,46 @@ class TrendMonitor:
                         ))
                         break
 
+        # Rule: attention_collapse + convergence_slow → WARN (D-09)
+        attn_entropy_keys = [
+            k for k in metrics
+            if "attention" in k and "entropy" in k
+            and not k.endswith((":short", ":medium", ":long"))
+        ]
+        if self._last_convergence_score is not None and self._last_convergence_score < 40:
+            for k in attn_entropy_keys:
+                entropy_slope = self._compute_slope(self._windows.get(k, []))
+                if entropy_slope is not None and entropy_slope < 0:
+                    alerts.append((
+                        "attention_collapse_convergence_slow",
+                        AlertLevel.WARN,
+                        "Attention entropy collapsing + slow convergence — "
+                        "possible attention degradation",
+                    ))
+                    break
+
+        # Rule: qkv_condition_high + gradient_anomaly → WARN (D-09)
+        qkv_cond_keys = [
+            k for k in metrics
+            if "qkv" in k and "cond" in k
+            and not k.endswith((":short", ":medium", ":long"))
+        ]
+        for k in qkv_cond_keys:
+            win = self._windows.get(k, [])
+            if win and win[-1] > 1000:
+                # High condition number — check for gradient anomaly
+                for gk in grad_keys:
+                    g_slope = self._compute_slope(self._windows.get(gk, []))
+                    if g_slope is not None and abs(g_slope) > 0.001:
+                        alerts.append((
+                            "qkv_condition_high_gradient_anomaly",
+                            AlertLevel.WARN,
+                            "High QKV condition number + gradient anomaly — "
+                            "possible projection matrix instability",
+                        ))
+                        break
+                break  # One alert per rule
+
         return alerts
 
     def check_wgr(self, name: str, log_ratio: float, step: int) -> AlertLevel:
