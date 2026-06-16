@@ -58,6 +58,12 @@
 
 **Requirements:** BSZ-01, BSZ-02, BSZ-03, BSZ-04, BSZ-05, INT-01 (completion), INT-02 (completion), INT-03, INT-04
 **Status:** Pending
+**Plans:** 3 plans
+
+Plans:
+- [ ] 14-01-PLAN.md — BatchSensitivityCollector core + TrendMonitor.check_bsz() + correlation rules
+- [ ] 14-02-PLAN.md — Wire BatchSensitivityCollector into Inspector + export
+- [ ] 14-03-PLAN.md — Integration tests: torch.compile + performance overhead + E2E
 
 - [ ] BSZ-01: Gradient noise scale estimate (TensorBoard scalar)
 - [ ] BSZ-02: Anomalously high gradient noise scale -> WARN alert (suggest larger batch)
@@ -172,7 +178,7 @@ Phase 14 (Batch Sensitivity + Integration) -- requires all 3 prior phases
 | 11. Convergence Trajectory | v1.3 | 3/3 | Complete    | 2026-06-15 |
 | 12. Weight/Grad Ratio | v1.3 | 3/3 | ✅ Complete | 2026-06-15 |
 | 13. LR Scheduler Analysis | v1.3 | 2/2 | ✅ Complete | 2026-06-15 |
-| 14. Batch Sensitivity + Integration | v1.3 | 0 | Pending | — |
+| 14. Batch Sensitivity + Integration | v1.3 | 0/3 | Pending | — |
 
 ---
 
