@@ -407,22 +407,25 @@ assert overhead_pct < 5.0, f"Overhead {overhead_pct:.1f}% exceeds 5% budget"
 |---|-------|---------|---------------|
 | — | (none) | — | — |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Micro-batch API design: How does Inspector.step() receive batch data?**
+1. **Micro-batch API design: How does Inspector.step() receive batch data?** (RESOLVED)
    - What we know: Current `step(**metrics)` only takes scalar metrics. Micro-batch analysis needs actual tensors.
    - What's unclear: Should `step()` signature change to accept optional `batch_inputs`, `batch_targets`, `loss_fn`? Or should there be a separate `analyze_batch()` method?
    - Recommendation: Add optional parameters to `step()` with `None` defaults. Only pass to BatchSensitivityCollector when not None. This keeps backward compatibility.
+   - **Resolution:** Plan 02 adds optional `batch_inputs`, `batch_targets`, `loss_fn` parameters to Inspector.step() with None defaults. When micro_batch_variance=True and batch data is provided, pass to collector.
 
-2. **GNS anomaly threshold: What constitutes "anomalously high"?**
+2. **GNS anomaly threshold: What constitutes "anomalously high"?** (RESOLVED)
    - What we know: BSZ-02 says "anomalously high GNS → suggest larger batch". No specific threshold defined.
    - What's unclear: Should this be relative (rising trend) or absolute (above fixed value)?
    - Recommendation: Use trend-based detection (rising slope over 20+ points) rather than absolute threshold, consistent with other metrics. GNS is scale-dependent.
+   - **Resolution:** Trend-based detection via TrendMonitor.check_bsz() with multi-scale slope analysis. Consistent with Phase 11-13 patterns.
 
-3. **Correlation rules: Which specific rules for INT-02?**
+3. **Correlation rules: Which specific rules for INT-02?** (RESOLVED)
    - What we know: D-10 says "add weight_grad_extreme + convergence_slow → CRITICAL".
    - What's unclear: Are there other rules involving BSZ metrics?
    - Recommendation: Add `gns_high + convergence_slow → WARN` (high noise + slow convergence suggests batch size issue). Add `weight_grad_extreme + convergence_slow → CRITICAL` as specified.
+   - **Resolution:** Both rules added in Plan 01 Task 2: `gns_high + convergence_slow → WARN` and `weight_grad_extreme + convergence_slow → CRITICAL`.
 
 ## Environment Availability
 
