@@ -1641,29 +1641,31 @@ class TestCheckAttention:
     def test_check_attention_recovering_decays_count(self) -> None:
         """Both slopes positive (entropy recovering) decrements alert count."""
         mon = TrendMonitor()
-        # Build up count with collapsing entropy
-        for i in range(10):
-            mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.1, step=i)
+        # Build up count with consistently falling entropy
+        for i in range(15):
+            mon.check_attention("layer_0", entropy=10.0 - float(i) * 0.3, step=i)
         count_before = mon._alert_counts["attention/layer_0"]
         assert count_before > 0
-        # Now recover: both slopes positive
-        for i in range(10):
-            mon.check_attention("layer_0", entropy=3.0 + float(i) * 0.5, step=10 + i)
+        # Now recover: both slopes positive (entropy values jump up and keep rising)
+        for i in range(15):
+            mon.check_attention("layer_0", entropy=6.0 + float(i) * 0.5, step=15 + i)
         count_after = mon._alert_counts["attention/layer_0"]
         assert count_after < count_before
 
     def test_check_attention_mixed_signal_decays_count(self) -> None:
         """Mixed signal (short and long slopes disagree) decays the alert count."""
         mon = TrendMonitor()
-        # Build up count with collapsing entropy
+        # Build up count with consistently falling entropy
         for i in range(15):
-            mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.1, step=i)
+            mon.check_attention("layer_0", entropy=10.0 - float(i) * 0.5, step=i)
         count_before = mon._alert_counts["attention/layer_0"]
         assert count_before > 0
-        # Create mixed signal: short window rising, long window still falling
+        # Create mixed signal: long window still has falling data, but recent
+        # (short window) data is rising. This makes long_slope < 0, short_slope > 0.
         for i in range(15):
-            mon.check_attention("layer_0", entropy=3.0 + float(i) * 0.2, step=15 + i)
+            mon.check_attention("layer_0", entropy=3.0 + float(i) * 0.5, step=15 + i)
         count_after = mon._alert_counts["attention/layer_0"]
+        # Count should have decayed due to mixed signal
         assert count_after < count_before
 
     def test_check_attention_info_after_5(self) -> None:
@@ -1706,7 +1708,7 @@ class TestCheckAttention:
     def test_check_attention_returns_alert_level(self) -> None:
         """check_attention returns correct AlertLevel at each stage."""
         mon = TrendMonitor()
-        level = mon.check_attention("layer_0", entropy=1.5, step=0)
+        level = mon.check_attention("layer_0", entropy=5.0, step=0)
         assert level == AlertLevel.OK
         for i in range(1, 8):
             level = mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.1, step=i)
@@ -1757,29 +1759,31 @@ class TestCheckQKV:
     def test_check_qkv_improving_decays_count(self) -> None:
         """Both slopes negative (condition improving) decrements alert count."""
         mon = TrendMonitor()
-        # Build up count with rising condition number
-        for i in range(10):
-            mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 10.0, step=i)
+        # Build up count with consistently rising condition number
+        for i in range(15):
+            mon.check_qkv("layer_0", condition_number=10.0 + float(i) * 0.3, step=i)
         count_before = mon._alert_counts["qkv/layer_0"]
         assert count_before > 0
-        # Now improve: both slopes negative
-        for i in range(10):
-            mon.check_qkv("layer_0", condition_number=300.0 - float(i) * 20.0, step=10 + i)
+        # Now improve: both slopes negative (condition number drops and keeps falling)
+        for i in range(15):
+            mon.check_qkv("layer_0", condition_number=12.0 - float(i) * 0.5, step=15 + i)
         count_after = mon._alert_counts["qkv/layer_0"]
         assert count_after < count_before
 
     def test_check_qkv_mixed_signal_decays_count(self) -> None:
         """Mixed signal (short and long slopes disagree) decays the alert count."""
         mon = TrendMonitor()
-        # Build up count with rising condition number
+        # Build up count with consistently rising values
         for i in range(15):
-            mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 10.0, step=i)
+            mon.check_qkv("layer_0", condition_number=float(i), step=i)
         count_before = mon._alert_counts["qkv/layer_0"]
         assert count_before > 0
-        # Create mixed signal: short window falling, long window still rising
+        # Create mixed signal: long window still has rising data, but recent
+        # (short window) data is falling. This makes long_slope > 0, short_slope < 0.
         for i in range(15):
-            mon.check_qkv("layer_0", condition_number=300.0 - float(i) * 5.0, step=15 + i)
+            mon.check_qkv("layer_0", condition_number=10.0 - float(i), step=15 + i)
         count_after = mon._alert_counts["qkv/layer_0"]
+        # Count should have decayed due to mixed signal
         assert count_after < count_before
 
     def test_check_qkv_info_after_5(self) -> None:
