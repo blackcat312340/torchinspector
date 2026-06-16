@@ -52,29 +52,29 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ATTN-01 | TBD | Pending |
-| ATTN-02 | TBD | Pending |
-| ATTN-03 | TBD | Pending |
-| ATTN-04 | TBD | Pending |
-| HEAD-01 | TBD | Pending |
-| HEAD-02 | TBD | Pending |
-| HEAD-03 | TBD | Pending |
-| HEAD-04 | TBD | Pending |
-| QKV-01 | TBD | Pending |
-| QKV-02 | TBD | Pending |
-| QKV-03 | TBD | Pending |
-| QKV-04 | TBD | Pending |
-| INT-05 | TBD | Pending |
-| INT-06 | TBD | Pending |
-| INT-07 | TBD | Pending |
-| INT-08 | TBD | Pending |
+| ATTN-01 | Phase 16 | Pending |
+| ATTN-02 | Phase 16 | Pending |
+| ATTN-03 | Phase 16 | Pending |
+| ATTN-04 | Phase 15 | Pending |
+| HEAD-01 | Phase 16 | Pending |
+| HEAD-02 | Phase 16 | Pending |
+| HEAD-03 | Phase 16 | Pending |
+| HEAD-04 | Phase 16 | Pending |
+| QKV-01 | Phase 17 | Pending |
+| QKV-02 | Phase 17 | Pending |
+| QKV-03 | Phase 17 | Pending |
+| QKV-04 | Phase 17 | Pending |
+| INT-05 | Phase 18 | Pending |
+| INT-06 | Phase 15 | Pending |
+| INT-07 | Phase 18 | Pending |
+| INT-08 | Phase 15 | Pending |
 
 **Coverage:**
 - v1.4 requirements: 16 total
-- Mapped to phases: TBD (roadmap pending)
+- Mapped to phases: 16/16 (100%)
 - Unmapped: 0
 
 ---
 
 *Requirements defined: 2026-06-15*
-*Last updated: 2026-06-15*
+*Last updated: 2026-06-15 — Phase mappings assigned*

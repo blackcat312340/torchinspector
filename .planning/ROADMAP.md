@@ -2,52 +2,63 @@
 
 ## Milestones
 
-- ✅ **v1.3 通用监控增强** — Phases 11-14 (shipped 2026-06-15)
-- ✅ **v1.2 Smart Monitoring** — Phases 1-10 (shipped 2026-06-15)
+- [ ] **v1.4 Transformer Analysis** — Phases 15-18 (planning)
+- [x] **v1.3 通用监控增强** — Phases 11-14 (shipped 2026-06-15)
+- [x] **v1.2 Smart Monitoring** — Phases 1-10 (shipped 2026-06-15)
 
 ## Phases
 
-<details>
-<summary>✅ v1.3 通用监控增强 (Phases 11-14) — SHIPPED 2026-06-15</summary>
+- [ ] **Phase 15: Utils + TrendMonitor Extensions** — Foundation: attention-aware TrendMonitor checks, correlation rules, FlashAttention compat
+- [ ] **Phase 16: AttentionCollector** — Per-head entropy, weight stats, histograms, head health detection
+- [ ] **Phase 17: QKVCollector** — Condition number, spectral norm, effective rank, SVD distribution
+- [ ] **Phase 18: Inspector Wiring + Health Report + Integration** — `transformer=True` flag, unified alerting, Transformer health report section
 
-**Goal:** 补全所有网络类型通用的监控指标，让训练可观测性更完整
-**Requirements:** 21/21 complete (100% coverage)
-**Plans:** 11 | **Tests:** 357 | **Source LOC:** 4,432
+## Phase Details
 
-- [x] Phase 11: Convergence Trajectory Analysis (3/3 plans) — loss trend, speed assessment, divergence detection
-- [x] Phase 12: Weight/Gradient Ratio Monitoring (3/3 plans) — per-layer W/G ratio, vanishing/exploding detection
-- [x] Phase 13: Learning Rate Scheduler Analysis (2/2 plans) — LR anomaly detection, lr-loss correlation
-- [x] Phase 14: Batch Sensitivity + Integration (3/3 plans) — GNS, micro-batch variance, all 4 metrics through TrendMonitor
+### Phase 15: Utils + TrendMonitor Extensions
+**Goal**: Transformer analysis has foundation infrastructure -- TrendMonitor can detect attention anomalies and FlashAttention models collect safely
+**Depends on**: Phase 14 (existing TrendMonitor with 4 check methods, 6 correlation rules)
+**Requirements**: ATTN-04, INT-08
+**Success Criteria** (what must be TRUE):
+  1. TrendMonitor can track attention entropy across 3 time windows (10/50/200 steps) and detect gradual degradation
+  2. TrendMonitor includes attention-aware check methods (`check_attention_entropy`, `check_head_collapse`, `check_head_dead`, `check_head_redundancy`) ready for collectors to call
+  3. New correlation rule definitions exist: attention collapse + slow convergence; QKV condition anomaly + gradient anomaly (wired end-to-end in Phase 18)
+  4. FlashAttention models automatically fall back to math SDPA backend during attention weight collection without user intervention
+**Plans**: TBD
 
-</details>
+### Phase 16: AttentionCollector
+**Goal**: Users can observe per-head attention behavior and the system detects unhealthy heads
+**Depends on**: Phase 15
+**Requirements**: ATTN-01, ATTN-02, ATTN-03, HEAD-01, HEAD-02, HEAD-03, HEAD-04
+**Success Criteria** (what must be TRUE):
+  1. User can view per-layer per-head attention weight mean and variance as TensorBoard scalars
+  2. User can view per-layer per-head attention entropy (H = -sum(p * log(p))) as TensorBoard scalars
+  3. User can view per-layer per-head attention weight distribution as TensorBoard histograms
+  4. System detects heads with persistently low entropy (collapse) and heads that never change (dead), alerting via TrendMonitor
+  5. System detects redundant head pairs (cosine similarity > 0.95) and shows per-head specialization (entropy vs layer average)
+**Plans**: TBD
 
-<details>
-<summary>✅ v1.2 Smart Monitoring (Phase 10) — SHIPPED 2026-06-15</summary>
+### Phase 17: QKVCollector
+**Goal**: Users can observe numerical health of Q/K/V projection matrices
+**Depends on**: Phase 15
+**Requirements**: QKV-01, QKV-02, QKV-03, QKV-04
+**Success Criteria** (what must be TRUE):
+  1. User can view condition number of Q, K, V projection matrices per layer as TensorBoard scalars
+  2. User can view spectral norm of Q, K, V projection matrices per layer as TensorBoard scalars
+  3. User can view effective rank of Q, K, V projection matrices per layer as TensorBoard scalars
+  4. User can view singular value distribution of Q, K, V projection matrices as TensorBoard histograms
+**Plans**: TBD
 
-- [x] Phase 10: Smart Monitoring (4/4 plans) — Auto detection, trend alerting, health reports
-
-</details>
-
-<details>
-<summary>✅ v1.1 Validation & Release (Phases 7-9) — SHIPPED 2026-06-15</summary>
-
-- [x] Phase 7: Grad-CAM Validation (2/2 plans) — Captum on real CNN, verified heatmaps
-- [x] Phase 8: Benchmarks & Docs (2/2 plans) — Performance data, Sphinx HTML
-- [ ] Phase 9: PyPI Release (0/2 plans) — Skipped (not industrial-grade)
-
-</details>
-
-<details>
-<summary>✅ v1.0 Core MVP (Phases 1-6) — SHIPPED 2026-06-15</summary>
-
-- [x] Phase 1: Core Observer (5/5 plans) — TensorBoard wrapper, scalar/histogram/graph logging
-- [x] Phase 2: Layer Observer (3/3 plans) — Hook-based activation monitoring, gradient norms
-- [x] Phase 3: Feature Map Viewer (3/3 plans) — CNN feature map visualization, dead neuron detection
-- [x] Phase 4: Explainability Plugin (3/3 plans) — Grad-CAM, Captum integration, attention heatmaps
-- [x] Phase 5: Ecosystem & Polish (3/3 plans) — Lightning callback, HF compat, docs
-- [x] Phase 6: Universal Layer Observability (6/6 plans) — BN/LN/Pooling/RNN, weight heatmaps
-
-</details>
+### Phase 18: Inspector Wiring + Health Report + Integration
+**Goal**: Transformer analysis is a single-flag feature with unified alerting and health reporting
+**Depends on**: Phase 16, Phase 17
+**Requirements**: INT-05, INT-06, INT-07
+**Success Criteria** (what must be TRUE):
+  1. User enables all Transformer analysis with `inspector.watch(model, transformer=True)` -- no separate collector setup needed
+  2. All Transformer metrics (attention entropy, head health, QKV stability) escalate through unified TrendMonitor alerting (INFO/WARN/CRITICAL)
+  3. Health report includes a dedicated Transformer section summarizing head health (dead/collapsed/redundant heads) and QKV stability (condition numbers, effective rank)
+  4. Cross-metric correlation rules work end-to-end: attention collapse + slow convergence warns; QKV condition anomaly + gradient anomaly warns
+**Plans**: TBD
 
 ## Historical Progress
 
@@ -67,6 +78,10 @@
 | 12. Weight/Grad Ratio | v1.3 | 3/3 | ✓ Complete | 2026-06-15 |
 | 13. LR Scheduler Analysis | v1.3 | 2/2 | ✓ Complete | 2026-06-15 |
 | 14. Batch Sensitivity + Integration | v1.3 | 3/3 | ✓ Complete | 2026-06-15 |
+| 15. Utils + TrendMonitor Extensions | v1.4 | 0/TBD | Not started | — |
+| 16. AttentionCollector | v1.4 | 0/TBD | Not started | — |
+| 17. QKVCollector | v1.4 | 0/TBD | Not started | — |
+| 18. Inspector Wiring + Health Report | v1.4 | 0/TBD | Not started | — |
 
 ---
 
@@ -74,3 +89,4 @@
 *Shipped v1.1: 2026-06-15 | 2 phases | 4 plans*
 *Shipped v1.2: 2026-06-15 | 1 phase | 4 plans | 211 tests | 8,203 LOC*
 *Shipped v1.3: 2026-06-15 | 4 phases | 11 plans | 357 tests | 4,432 LOC*
+*Roadmap v1.4: 2026-06-15 | 4 phases | 16 requirements*
