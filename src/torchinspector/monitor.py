@@ -481,6 +481,188 @@ class TrendMonitor:
         self._current_alerts[alert_key] = level
         return level
 
+    def check_attention(self, name: str, entropy: float, step: int) -> AlertLevel:
+        """Check attention entropy for collapse (trend detection).
+
+        Feeds three sub-windows (short/medium/long) and detects whether
+        entropy is consistently falling (attention collapse) across
+        multiple time scales.
+
+        Args:
+            name: Layer or head name (e.g., ``"layer_0"``).
+            entropy: Current attention entropy value.
+            step: Current training step.
+
+        Returns:
+            Current ``AlertLevel`` for this attention metric.
+        """
+        # Feed three sub-windows
+        for suffix, size in [
+            (":short", _SHORT_WINDOW),
+            (":medium", _MEDIUM_WINDOW),
+            (":long", _LONG_WINDOW),
+        ]:
+            key = f"attention/{name}/entropy{suffix}"
+            win = self._windows[key]
+            win.append(entropy)
+            if len(win) > size:
+                win.pop(0)
+
+        # Also maintain unsuffixed window for correlation_check lookups
+        base_key = f"attention/{name}/entropy"
+        base_win = self._windows[base_key]
+        base_win.append(entropy)
+        if len(base_win) > self._window_size:
+            base_win.pop(0)
+
+        # Compute slopes for short and long windows
+        short_key = f"attention/{name}/entropy:short"
+        long_key = f"attention/{name}/entropy:long"
+        short_slope = self._compute_slope(self._windows.get(short_key, []))
+        long_slope = self._compute_slope(self._windows.get(long_key, []))
+
+        alert_key = f"attention/{name}"
+
+        # Trend detection logic
+        if short_slope is not None and long_slope is not None:
+            if short_slope < 0 and long_slope < 0:
+                # Both negative → entropy collapsing (attention degrading)
+                self._alert_counts[alert_key] += 1
+            elif short_slope > 0 and long_slope > 0:
+                # Both positive → entropy recovering
+                self._alert_counts[alert_key] = max(0, self._alert_counts[alert_key] - 1)
+            else:
+                # Mixed signal or no clear trend → decay count by 1
+                self._alert_counts[alert_key] = max(0, self._alert_counts[alert_key] - 1)
+        elif short_slope is not None:
+            # Only short slope available — check direction
+            if short_slope < 0:
+                self._alert_counts[alert_key] += 1
+
+        count = self._alert_counts[alert_key]
+
+        # Escalation thresholds
+        if count >= 20 and short_slope is not None and long_slope is not None:
+            # Check for acceleration: short slope magnitude > 1.5x long slope magnitude
+            if abs(short_slope) > abs(long_slope) * 1.5:
+                level = AlertLevel.CRITICAL
+            elif count >= 10:
+                level = AlertLevel.WARN
+            elif count >= 5:
+                level = AlertLevel.INFO
+            else:
+                level = AlertLevel.OK
+        elif count >= 10:
+            level = AlertLevel.WARN
+        elif count >= 5:
+            level = AlertLevel.INFO
+        else:
+            level = AlertLevel.OK
+
+        # Reset on improvement: if neither collapsing nor recovering pattern
+        # is sustained, reset the alert count
+        if short_slope is not None and long_slope is not None:
+            both_falling = short_slope < 0 and long_slope < 0
+            both_rising = short_slope > 0 and long_slope > 0
+            if not both_falling and not both_rising and count < 5:
+                # No sustained trend — reset
+                self._alert_counts[alert_key] = 0
+                level = AlertLevel.OK
+
+        self._current_alerts[alert_key] = level
+        return level
+
+    def check_qkv(self, name: str, condition_number: float, step: int) -> AlertLevel:
+        """Check QKV condition number for ill-conditioning (trend detection).
+
+        Feeds three sub-windows (short/medium/long) and detects whether
+        the condition number is consistently rising (ill-conditioned
+        projection matrices) across multiple time scales.
+
+        Args:
+            name: Layer or head name (e.g., ``"layer_0"``).
+            condition_number: Current QKV condition number.
+            step: Current training step.
+
+        Returns:
+            Current ``AlertLevel`` for this QKV metric.
+        """
+        # Feed three sub-windows
+        for suffix, size in [
+            (":short", _SHORT_WINDOW),
+            (":medium", _MEDIUM_WINDOW),
+            (":long", _LONG_WINDOW),
+        ]:
+            key = f"qkv/{name}/cond{suffix}"
+            win = self._windows[key]
+            win.append(condition_number)
+            if len(win) > size:
+                win.pop(0)
+
+        # Also maintain unsuffixed window for correlation_check lookups
+        base_key = f"qkv/{name}/cond"
+        base_win = self._windows[base_key]
+        base_win.append(condition_number)
+        if len(base_win) > self._window_size:
+            base_win.pop(0)
+
+        # Compute slopes for short and long windows
+        short_key = f"qkv/{name}/cond:short"
+        long_key = f"qkv/{name}/cond:long"
+        short_slope = self._compute_slope(self._windows.get(short_key, []))
+        long_slope = self._compute_slope(self._windows.get(long_key, []))
+
+        alert_key = f"qkv/{name}"
+
+        # Trend detection logic
+        if short_slope is not None and long_slope is not None:
+            if short_slope > 0 and long_slope > 0:
+                # Both positive → condition number rising (ill-conditioned)
+                self._alert_counts[alert_key] += 1
+            elif short_slope < 0 and long_slope < 0:
+                # Both negative → condition number improving
+                self._alert_counts[alert_key] = max(0, self._alert_counts[alert_key] - 1)
+            else:
+                # Mixed signal or no clear trend → decay count by 1
+                self._alert_counts[alert_key] = max(0, self._alert_counts[alert_key] - 1)
+        elif short_slope is not None:
+            # Only short slope available — check direction
+            if short_slope > 0:
+                self._alert_counts[alert_key] += 1
+
+        count = self._alert_counts[alert_key]
+
+        # Escalation thresholds
+        if count >= 20 and short_slope is not None and long_slope is not None:
+            # Check for acceleration: short slope magnitude > 1.5x long slope magnitude
+            if abs(short_slope) > abs(long_slope) * 1.5:
+                level = AlertLevel.CRITICAL
+            elif count >= 10:
+                level = AlertLevel.WARN
+            elif count >= 5:
+                level = AlertLevel.INFO
+            else:
+                level = AlertLevel.OK
+        elif count >= 10:
+            level = AlertLevel.WARN
+        elif count >= 5:
+            level = AlertLevel.INFO
+        else:
+            level = AlertLevel.OK
+
+        # Reset on improvement: if neither rising nor falling pattern
+        # is sustained, reset the alert count
+        if short_slope is not None and long_slope is not None:
+            both_rising = short_slope > 0 and long_slope > 0
+            both_falling = short_slope < 0 and long_slope < 0
+            if not both_rising and not both_falling and count < 5:
+                # No sustained trend — reset
+                self._alert_counts[alert_key] = 0
+                level = AlertLevel.OK
+
+        self._current_alerts[alert_key] = level
+        return level
+
     def check_lr(self, lr: float, step: int) -> AlertLevel:
         """Feed the ``train/lr`` window for correlation lookups.
 
