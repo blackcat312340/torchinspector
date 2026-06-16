@@ -1595,3 +1595,235 @@ class TestBSZCorrelationRules:
 
         wgr_rules = [a for a in alerts if a[0] == "weight_grad_extreme_convergence_slow"]
         assert len(wgr_rules) == 0
+
+
+# -- Attention check_attention() tests (Phase 15 Plan 01) ----------------------
+
+
+class TestCheckAttention:
+    """Tests for TrendMonitor.check_attention() — multi-scale attention entropy trend detection."""
+
+    def test_check_attention_feeds_subwindows(self) -> None:
+        """check_attention creates attention/{name}/entropy:short, :medium, :long keys."""
+        mon = TrendMonitor()
+        mon.check_attention("layer_0", entropy=1.5, step=1)
+        assert "attention/layer_0/entropy:short" in mon._windows
+        assert "attention/layer_0/entropy:medium" in mon._windows
+        assert "attention/layer_0/entropy:long" in mon._windows
+
+    def test_check_attention_feeds_base_window(self) -> None:
+        """check_attention maintains unsuffixed base window for correlation lookups."""
+        mon = TrendMonitor()
+        mon.check_attention("layer_0", entropy=1.5, step=1)
+        assert "attention/layer_0/entropy" in mon._windows
+        assert mon._windows["attention/layer_0/entropy"] == [1.5]
+
+    def test_check_attention_short_window_truncation(self) -> None:
+        """Short window holds at most 10 values."""
+        mon = TrendMonitor()
+        for i in range(20):
+            mon.check_attention("layer_0", entropy=float(i), step=i)
+        assert len(mon._windows["attention/layer_0/entropy:short"]) == 10
+
+    def test_check_attention_first_call_returns_ok(self) -> None:
+        """First call with insufficient data returns AlertLevel.OK."""
+        mon = TrendMonitor()
+        level = mon.check_attention("layer_0", entropy=1.5, step=1)
+        assert level == AlertLevel.OK
+
+    def test_check_attention_collapsing_increments_count(self) -> None:
+        """Consistently falling entropy increments alert count."""
+        mon = TrendMonitor()
+        for i in range(15):
+            mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.1, step=i)
+        assert mon._alert_counts["attention/layer_0"] > 0
+
+    def test_check_attention_recovering_decays_count(self) -> None:
+        """Both slopes positive (entropy recovering) decrements alert count."""
+        mon = TrendMonitor()
+        # Build up count with collapsing entropy
+        for i in range(10):
+            mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.1, step=i)
+        count_before = mon._alert_counts["attention/layer_0"]
+        assert count_before > 0
+        # Now recover: both slopes positive
+        for i in range(10):
+            mon.check_attention("layer_0", entropy=3.0 + float(i) * 0.5, step=10 + i)
+        count_after = mon._alert_counts["attention/layer_0"]
+        assert count_after < count_before
+
+    def test_check_attention_mixed_signal_decays_count(self) -> None:
+        """Mixed signal (short and long slopes disagree) decays the alert count."""
+        mon = TrendMonitor()
+        # Build up count with collapsing entropy
+        for i in range(15):
+            mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.1, step=i)
+        count_before = mon._alert_counts["attention/layer_0"]
+        assert count_before > 0
+        # Create mixed signal: short window rising, long window still falling
+        for i in range(15):
+            mon.check_attention("layer_0", entropy=3.0 + float(i) * 0.2, step=15 + i)
+        count_after = mon._alert_counts["attention/layer_0"]
+        assert count_after < count_before
+
+    def test_check_attention_info_after_5(self) -> None:
+        """5 consecutive collapse steps trigger INFO level."""
+        mon = TrendMonitor()
+        for i in range(8):
+            level = mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.1, step=i)
+        assert level == AlertLevel.INFO
+
+    def test_check_attention_warn_after_10(self) -> None:
+        """10 consecutive collapse steps trigger WARN level."""
+        mon = TrendMonitor()
+        for i in range(15):
+            level = mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.1, step=i)
+        assert level == AlertLevel.WARN
+
+    def test_check_attention_critical_after_20_with_acceleration(self) -> None:
+        """20 steps + accelerating collapse triggers CRITICAL."""
+        mon = TrendMonitor()
+        # Feed slow collapse for long window
+        for i in range(200):
+            mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.005, step=i)
+        # Now fast collapse in short window (acceleration)
+        for i in range(10):
+            level = mon.check_attention("layer_0", entropy=4.0 - float(i) * 0.5, step=200 + i)
+        assert level == AlertLevel.CRITICAL
+
+    def test_check_attention_resets_on_improvement(self) -> None:
+        """Trend reversal resets count to 0 when no sustained pattern."""
+        mon = TrendMonitor()
+        # Build up count with collapsing entropy
+        for i in range(6):
+            mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.1, step=i)
+        assert mon._alert_counts["attention/layer_0"] > 0
+        # Feed flat/stable values that break the trend
+        for i in range(20):
+            mon.check_attention("layer_0", entropy=3.0, step=6 + i)
+        assert mon._alert_counts["attention/layer_0"] == 0
+
+    def test_check_attention_returns_alert_level(self) -> None:
+        """check_attention returns correct AlertLevel at each stage."""
+        mon = TrendMonitor()
+        level = mon.check_attention("layer_0", entropy=1.5, step=0)
+        assert level == AlertLevel.OK
+        for i in range(1, 8):
+            level = mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.1, step=i)
+        assert level == AlertLevel.INFO
+
+
+# -- QKV check_qkv() tests (Phase 15 Plan 01) ---------------------------------
+
+
+class TestCheckQKV:
+    """Tests for TrendMonitor.check_qkv() — multi-scale QKV condition number trend detection."""
+
+    def test_check_qkv_feeds_subwindows(self) -> None:
+        """check_qkv creates qkv/{name}/cond:short, :medium, :long keys."""
+        mon = TrendMonitor()
+        mon.check_qkv("layer_0", condition_number=100.0, step=1)
+        assert "qkv/layer_0/cond:short" in mon._windows
+        assert "qkv/layer_0/cond:medium" in mon._windows
+        assert "qkv/layer_0/cond:long" in mon._windows
+
+    def test_check_qkv_feeds_base_window(self) -> None:
+        """check_qkv maintains unsuffixed base window for correlation lookups."""
+        mon = TrendMonitor()
+        mon.check_qkv("layer_0", condition_number=100.0, step=1)
+        assert "qkv/layer_0/cond" in mon._windows
+        assert mon._windows["qkv/layer_0/cond"] == [100.0]
+
+    def test_check_qkv_short_window_truncation(self) -> None:
+        """Short window holds at most 10 values."""
+        mon = TrendMonitor()
+        for i in range(20):
+            mon.check_qkv("layer_0", condition_number=float(i) * 10.0, step=i)
+        assert len(mon._windows["qkv/layer_0/cond:short"]) == 10
+
+    def test_check_qkv_first_call_returns_ok(self) -> None:
+        """First call with insufficient data returns AlertLevel.OK."""
+        mon = TrendMonitor()
+        level = mon.check_qkv("layer_0", condition_number=100.0, step=1)
+        assert level == AlertLevel.OK
+
+    def test_check_qkv_rising_increments_count(self) -> None:
+        """Consistently rising condition number increments alert count."""
+        mon = TrendMonitor()
+        for i in range(15):
+            mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 10.0, step=i)
+        assert mon._alert_counts["qkv/layer_0"] > 0
+
+    def test_check_qkv_improving_decays_count(self) -> None:
+        """Both slopes negative (condition improving) decrements alert count."""
+        mon = TrendMonitor()
+        # Build up count with rising condition number
+        for i in range(10):
+            mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 10.0, step=i)
+        count_before = mon._alert_counts["qkv/layer_0"]
+        assert count_before > 0
+        # Now improve: both slopes negative
+        for i in range(10):
+            mon.check_qkv("layer_0", condition_number=300.0 - float(i) * 20.0, step=10 + i)
+        count_after = mon._alert_counts["qkv/layer_0"]
+        assert count_after < count_before
+
+    def test_check_qkv_mixed_signal_decays_count(self) -> None:
+        """Mixed signal (short and long slopes disagree) decays the alert count."""
+        mon = TrendMonitor()
+        # Build up count with rising condition number
+        for i in range(15):
+            mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 10.0, step=i)
+        count_before = mon._alert_counts["qkv/layer_0"]
+        assert count_before > 0
+        # Create mixed signal: short window falling, long window still rising
+        for i in range(15):
+            mon.check_qkv("layer_0", condition_number=300.0 - float(i) * 5.0, step=15 + i)
+        count_after = mon._alert_counts["qkv/layer_0"]
+        assert count_after < count_before
+
+    def test_check_qkv_info_after_5(self) -> None:
+        """5 consecutive rising steps trigger INFO level."""
+        mon = TrendMonitor()
+        for i in range(8):
+            level = mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 10.0, step=i)
+        assert level == AlertLevel.INFO
+
+    def test_check_qkv_warn_after_10(self) -> None:
+        """10 consecutive rising steps trigger WARN level."""
+        mon = TrendMonitor()
+        for i in range(15):
+            level = mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 10.0, step=i)
+        assert level == AlertLevel.WARN
+
+    def test_check_qkv_critical_after_20_with_acceleration(self) -> None:
+        """20 steps + accelerating rise triggers CRITICAL."""
+        mon = TrendMonitor()
+        # Feed slow rise for long window
+        for i in range(200):
+            mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 0.5, step=i)
+        # Now fast rise in short window (acceleration)
+        for i in range(10):
+            level = mon.check_qkv("layer_0", condition_number=200.0 + float(i) * 50.0, step=200 + i)
+        assert level == AlertLevel.CRITICAL
+
+    def test_check_qkv_resets_on_improvement(self) -> None:
+        """Trend reversal resets count to 0 when no sustained pattern."""
+        mon = TrendMonitor()
+        # Build up count with rising condition number
+        for i in range(6):
+            mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 10.0, step=i)
+        assert mon._alert_counts["qkv/layer_0"] > 0
+        # Feed flat/stable values that break the trend
+        for i in range(20):
+            mon.check_qkv("layer_0", condition_number=200.0, step=6 + i)
+        assert mon._alert_counts["qkv/layer_0"] == 0
+
+    def test_check_qkv_returns_alert_level(self) -> None:
+        """check_qkv returns correct AlertLevel at each stage."""
+        mon = TrendMonitor()
+        level = mon.check_qkv("layer_0", condition_number=100.0, step=0)
+        assert level == AlertLevel.OK
+        for i in range(1, 8):
+            level = mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 10.0, step=i)
+        assert level == AlertLevel.INFO
