@@ -22,6 +22,7 @@ from torchinspector.collectors.scalar import ScalarCollector
 from torchinspector.collectors.weight import WeightCollector
 from torchinspector.collectors.weight_grad_ratio import WeightGradRatioCollector
 from torchinspector.collectors.lr_scheduler import LRCollector
+from torchinspector.collectors.batch_sensitivity import BatchSensitivityCollector
 from torchinspector.export import ONNXExporter
 from torchinspector.hooks import HookManager
 from torchinspector.monitor import TrendMonitor
@@ -68,6 +69,8 @@ class Inspector:
         residual_interval: int = 100,
         health_report_interval: int = 500,
         lr_warmup_steps: int = 100,
+        micro_batch_variance: bool = False,
+        analysis_interval: int = 5000,
     ) -> None:
         """Initialize Inspector with model, optimizer, and logging config.
 
@@ -97,6 +100,10 @@ class Inspector:
                 (default 100).
             lr_warmup_steps: Steps to skip LR anomaly detection during
                 warmup (default 100).
+            micro_batch_variance: Enable micro-batch variance analysis
+                for gradient noise estimation (default False, opt-in).
+            analysis_interval: Steps between micro-batch analyses
+                (default 5000). Only used when micro_batch_variance=True.
 
         Raises:
             TypeError: If model is not nn.Module or optimizer is not Optimizer.
@@ -206,11 +213,27 @@ class Inspector:
             log_interval=log_interval,
             warmup_steps=lr_warmup_steps,
         )
+        self._batch_sensitivity_collector = BatchSensitivityCollector(
+            model,
+            optimizer,
+            self._backend,
+            self._monitor,
+            log_interval=log_interval,
+            micro_batch_variance=micro_batch_variance,
+            analysis_interval=analysis_interval,
+        )
         self._onnx_exporter = ONNXExporter(model, self._log_dir)
 
     # -- Public API (10 methods) ------------------------------------------
 
-    def step(self, **metrics: float) -> None:
+    def step(
+        self,
+        *,
+        batch_inputs: torch.Tensor | None = None,
+        batch_targets: torch.Tensor | None = None,
+        loss_fn: object | None = None,
+        **metrics: float,
+    ) -> None:
         """Record one training step with optional user metrics.
 
         Increments the step counter, logs scalar metrics (including
@@ -218,6 +241,13 @@ class Inspector:
         histograms at the configured interval.
 
         Args:
+            batch_inputs: Current batch input tensors for micro-batch
+                variance analysis (optional, only used when
+                micro_batch_variance=True).
+            batch_targets: Current batch target tensors for micro-batch
+                variance analysis (optional).
+            loss_fn: Loss function for micro-batch variance analysis
+                (optional).
             **metrics: User metrics as keyword args (e.g., loss=0.5, accuracy=0.8).
         """
         self._step += 1
@@ -234,6 +264,12 @@ class Inspector:
             self._gradient_collector.collect(self._step)
             self._weight_grad_ratio_collector.collect(self._step)
             self._lr_collector.collect(self._step, loss_val=loss_val)
+            self._batch_sensitivity_collector.collect(
+                self._step,
+                batch_inputs=batch_inputs,
+                batch_targets=batch_targets,
+                loss_fn=loss_fn,
+            )
 
         self._feature_map_collector.collect(self._step)
         self._weight_collector.collect(self._step)
@@ -446,6 +482,7 @@ class Inspector:
         """
         if self._closed:
             return
+        self._batch_sensitivity_collector.close()
         self._lr_collector.close()
         self._weight_grad_ratio_collector.close()
         self._hook_manager.remove_all()

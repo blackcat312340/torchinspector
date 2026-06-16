@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from torchinspector.collectors.activation import ActivationCollector
+from torchinspector.collectors.batch_sensitivity import BatchSensitivityCollector
 from torchinspector.collectors.explain import ExplainCollector
 from torchinspector.collectors.lr_scheduler import LRCollector
 from torchinspector.collectors.feature_map import FeatureMapCollector
@@ -17,6 +18,7 @@ from torchinspector.collectors.weight_grad_ratio import WeightGradRatioCollector
 
 __all__ = [
     "ActivationCollector",
+    "BatchSensitivityCollector",
     "ExplainCollector",
     "LRCollector",
     "FeatureMapCollector",
