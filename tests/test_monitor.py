@@ -1376,3 +1376,67 @@ class TestWgrReport:
         assert "WGR:" in report
         # Should show at least 1 OK (fc2) and some non-OK (fc1)
         assert "OK" in report.split("WGR:")[1].split("\n")[0]
+
+
+# -- LR check_lr() and check_lr_stagnation() tests (Phase 13 Plan 01) --------
+
+
+class TestCheckLR:
+    """Tests for TrendMonitor.check_lr() and check_lr_stagnation()."""
+
+    def test_check_lr_feeds_window(self) -> None:
+        """check_lr appends lr to train/lr window."""
+        mon = TrendMonitor()
+        mon.check_lr(0.01, 100)
+        assert "train/lr" in mon._windows
+        assert mon._windows["train/lr"] == [0.01]
+
+    def test_check_lr_feeds_multiple_values(self) -> None:
+        """Multiple check_lr calls accumulate in window."""
+        mon = TrendMonitor()
+        mon.check_lr(0.01, 100)
+        mon.check_lr(0.008, 200)
+        mon.check_lr(0.005, 300)
+        assert mon._windows["train/lr"] == [0.01, 0.008, 0.005]
+
+    def test_check_lr_trims_to_window_size(self) -> None:
+        """Window trims to window_size after enough observations."""
+        mon = TrendMonitor(window_size=3)
+        for i in range(5):
+            mon.check_lr(float(i), step=i * 100)
+        assert len(mon._windows["train/lr"]) == 3
+        assert mon._windows["train/lr"] == [2.0, 3.0, 4.0]
+
+    def test_check_lr_returns_ok(self) -> None:
+        """check_lr always returns AlertLevel.OK."""
+        mon = TrendMonitor()
+        level = mon.check_lr(0.01, 100)
+        assert level == AlertLevel.OK
+
+    def test_check_lr_returns_ok_multiple(self) -> None:
+        """check_lr returns OK on every call."""
+        mon = TrendMonitor()
+        for i in range(10):
+            level = mon.check_lr(float(i), step=i * 100)
+            assert level == AlertLevel.OK
+
+    def test_check_lr_stagnation_sets_warn(self) -> None:
+        """check_lr_stagnation sets lr_stagnation to WARN."""
+        mon = TrendMonitor()
+        mon.check_lr_stagnation(100)
+        assert mon._current_alerts["lr_stagnation"] == AlertLevel.WARN
+
+    def test_check_lr_stagnation_appears_in_report(self) -> None:
+        """After check_lr_stagnation, report contains WARN for lr_stagnation."""
+        mon = TrendMonitor()
+        mon.check_lr_stagnation(100)
+        report = mon.report(step=200, loss=1.0)
+        assert "WARN" in report
+        assert "lr_stagnation" in report
+
+    def test_check_lr_stagnation_overwrites(self) -> None:
+        """Calling check_lr_stagnation multiple times keeps WARN level."""
+        mon = TrendMonitor()
+        mon.check_lr_stagnation(100)
+        mon.check_lr_stagnation(200)
+        assert mon._current_alerts["lr_stagnation"] == AlertLevel.WARN
