@@ -521,3 +521,76 @@ class TestClose:
         """Calling close() multiple times is safe."""
         collector.close()
         collector.close()
+
+
+# -- TestCorrelationRules ------------------------------------------------------
+
+
+class TestCorrelationRules:
+    """Tests for lr_spike + loss_stagnant correlation rule in TrendMonitor."""
+
+    def test_lr_spike_and_loss_stagnant_triggers_warn(self) -> None:
+        """lr/anomaly > 0 and flat loss should trigger lr_spike_loss_stagnant WARN."""
+        monitor = TrendMonitor(window_size=20)
+
+        # Feed lr/anomaly window with active spike (value > 0)
+        for _ in range(5):
+            monitor.check("lr/anomaly", 1.0, threshold=0.5)
+
+        # Feed flat loss values (slope ~ 0)
+        for i in range(5):
+            monitor.check("train/loss", 1.0 + 0.0001 * i, threshold=2.0)
+
+        metrics = {
+            "lr/anomaly": 1.0,
+            "train/loss": 1.0,
+        }
+        alerts = monitor.correlation_check(metrics)
+
+        rule_names = [name for name, _, _ in alerts]
+        assert "lr_spike_loss_stagnant" in rule_names
+
+        # Verify level and message
+        for name, level, msg in alerts:
+            if name == "lr_spike_loss_stagnant":
+                assert level == AlertLevel.WARN
+                assert "LR anomaly" in msg
+                assert "plateau" in msg
+                break
+
+    def test_lr_spike_and_loss_decreasing_no_alert(self) -> None:
+        """lr/anomaly > 0 but decreasing loss should NOT trigger lr_spike_loss_stagnant."""
+        monitor = TrendMonitor(window_size=20)
+
+        # Feed lr/anomaly window with active spike
+        for _ in range(5):
+            monitor.check("lr/anomaly", 1.0, threshold=0.5)
+
+        # Feed decreasing loss values (clear negative slope)
+        for i in range(5):
+            monitor.check("train/loss", 2.0 - 0.5 * i, threshold=5.0)
+
+        metrics = {
+            "lr/anomaly": 1.0,
+            "train/loss": 0.0,
+        }
+        alerts = monitor.correlation_check(metrics)
+
+        rule_names = [name for name, _, _ in alerts]
+        assert "lr_spike_loss_stagnant" not in rule_names
+
+    def test_no_lr_anomaly_no_rule(self) -> None:
+        """Flat loss without lr/anomaly should NOT trigger lr_spike_loss_stagnant."""
+        monitor = TrendMonitor(window_size=20)
+
+        # Feed flat loss values only (no lr/anomaly data)
+        for i in range(5):
+            monitor.check("train/loss", 1.0 + 0.0001 * i, threshold=2.0)
+
+        metrics = {
+            "train/loss": 1.0,
+        }
+        alerts = monitor.correlation_check(metrics)
+
+        rule_names = [name for name, _, _ in alerts]
+        assert "lr_spike_loss_stagnant" not in rule_names
