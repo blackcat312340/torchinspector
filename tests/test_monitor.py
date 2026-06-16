@@ -1440,3 +1440,158 @@ class TestCheckLR:
         mon.check_lr_stagnation(100)
         mon.check_lr_stagnation(200)
         assert mon._current_alerts["lr_stagnation"] == AlertLevel.WARN
+
+
+# -- BSZ check_bsz() tests (Phase 14 Plan 01) --------------------------------
+
+
+class TestCheckBSZ:
+    """Tests for TrendMonitor.check_bsz() — multi-scale GNS trend detection."""
+
+    def test_check_bsz_feeds_subwindows(self) -> None:
+        """check_bsz creates batch_sensitivity/gns:short, :medium, :long keys."""
+        mon = TrendMonitor()
+        mon.check_bsz(gns_value=1.0, step=1)
+        assert "batch_sensitivity/gns:short" in mon._windows
+        assert "batch_sensitivity/gns:medium" in mon._windows
+        assert "batch_sensitivity/gns:long" in mon._windows
+
+    def test_check_bsz_short_window_truncation(self) -> None:
+        """Short window holds at most 10 values."""
+        mon = TrendMonitor()
+        for i in range(20):
+            mon.check_bsz(gns_value=float(i), step=i)
+        assert len(mon._windows["batch_sensitivity/gns:short"]) == 10
+
+    def test_check_bsz_rising_trend_increments_count(self) -> None:
+        """Consistently rising GNS increments alert count."""
+        mon = TrendMonitor()
+        for i in range(15):
+            mon.check_bsz(gns_value=float(i), step=i)
+        assert mon._alert_counts["bsz"] > 0
+
+    def test_check_bsz_info_after_5(self) -> None:
+        """5 consecutive trend steps trigger INFO level."""
+        mon = TrendMonitor()
+        for i in range(8):
+            level = mon.check_bsz(gns_value=float(i), step=i)
+        assert level == AlertLevel.INFO
+
+    def test_check_bsz_warn_after_10(self) -> None:
+        """10 consecutive trend steps trigger WARN level."""
+        mon = TrendMonitor()
+        for i in range(15):
+            level = mon.check_bsz(gns_value=float(i), step=i)
+        assert level == AlertLevel.WARN
+
+    def test_check_bsz_resets_on_flat(self) -> None:
+        """Flat data resets count to 0."""
+        mon = TrendMonitor()
+        # Build up count with rising values
+        for i in range(6):
+            mon.check_bsz(gns_value=float(i), step=i)
+        assert mon._alert_counts["bsz"] > 0
+        # Feed flat values — both slopes ~0, no sustained trend
+        for i in range(20):
+            mon.check_bsz(gns_value=5.0, step=6 + i)
+        assert mon._alert_counts["bsz"] == 0
+
+    def test_check_bsz_returns_alert_level(self) -> None:
+        """check_bsz returns correct AlertLevel at each stage."""
+        mon = TrendMonitor()
+        # First few calls: OK (not enough data)
+        level = mon.check_bsz(gns_value=1.0, step=0)
+        assert level == AlertLevel.OK
+        # Build up to INFO
+        for i in range(1, 8):
+            level = mon.check_bsz(gns_value=float(i), step=i)
+        assert level == AlertLevel.INFO
+
+
+# -- BSZ correlation rules (Phase 14 Plan 01) ---------------------------------
+
+
+class TestBSZCorrelationRules:
+    """Tests for BSZ-specific correlation rules."""
+
+    def test_gns_high_convergence_slow_warn(self) -> None:
+        """Low convergence score + rising GNS triggers WARN."""
+        mon = TrendMonitor(window_size=30)
+        # Feed increasing loss to get low convergence score
+        for i in range(250):
+            mon.check_convergence(0.5 + i * 0.05, step=i)
+        # Force low convergence score
+        mon.convergence_score(current_loss=13.0)
+
+        # Feed rising GNS data
+        gns_data = [1.0, 2.0, 3.0, 4.0, 5.0]
+        for v in gns_data:
+            mon.check_bsz(gns_value=v, step=0)
+
+        metrics = {"batch_sensitivity/gns": gns_data[-1]}
+        alerts = mon.correlation_check(metrics)
+
+        gns_alerts = [a for a in alerts if a[0] == "gns_high_convergence_slow"]
+        assert len(gns_alerts) == 1
+        assert gns_alerts[0][1] == AlertLevel.WARN
+        assert "gradient noise" in gns_alerts[0][2].lower()
+
+    def test_no_gns_correlation_when_converging(self) -> None:
+        """High convergence score + normal GNS triggers no alert."""
+        mon = TrendMonitor(window_size=30)
+        # Feed decreasing loss to get high convergence score
+        for i in range(250):
+            mon.check_convergence(5.0 - i * 0.01, step=i)
+        # Set high convergence score
+        mon.convergence_score(current_loss=2.5)
+
+        # Feed stable GNS data
+        for i in range(10):
+            mon.check_bsz(gns_value=1.0, step=i)
+
+        metrics = {"batch_sensitivity/gns": 1.0}
+        alerts = mon.correlation_check(metrics)
+
+        gns_rules = [a for a in alerts if a[0] == "gns_high_convergence_slow"]
+        assert len(gns_rules) == 0
+
+    def test_weight_grad_extreme_convergence_slow_critical(self) -> None:
+        """Low convergence score + extreme WGR ratio triggers CRITICAL."""
+        mon = TrendMonitor(window_size=30)
+        # Feed increasing loss to get low convergence score
+        for i in range(250):
+            mon.check_convergence(0.5 + i * 0.05, step=i)
+        # Force low convergence score
+        mon.convergence_score(current_loss=13.0)
+
+        # Feed extreme WGR ratio data (> 6.0)
+        ratio_data = [7.0, 8.0, 9.0]
+        for v in ratio_data:
+            mon.check_wgr("fc1", log_ratio=v, step=0)
+
+        metrics = {"ratios/fc1/mean": ratio_data[-1]}
+        alerts = mon.correlation_check(metrics)
+
+        wgr_alerts = [a for a in alerts if a[0] == "weight_grad_extreme_convergence_slow"]
+        assert len(wgr_alerts) == 1
+        assert wgr_alerts[0][1] == AlertLevel.CRITICAL
+        assert "instability" in wgr_alerts[0][2].lower()
+
+    def test_no_wgr_extreme_when_converging(self) -> None:
+        """High convergence score + normal WGR triggers no alert."""
+        mon = TrendMonitor(window_size=30)
+        # Feed decreasing loss to get high convergence score
+        for i in range(250):
+            mon.check_convergence(5.0 - i * 0.01, step=i)
+        # Set high convergence score
+        mon.convergence_score(current_loss=2.5)
+
+        # Feed normal WGR data
+        for i in range(10):
+            mon.check_wgr("fc1", log_ratio=1.0 + float(i) * 0.01, step=i)
+
+        metrics = {"ratios/fc1/mean": 1.09}
+        alerts = mon.correlation_check(metrics)
+
+        wgr_rules = [a for a in alerts if a[0] == "weight_grad_extreme_convergence_slow"]
+        assert len(wgr_rules) == 0
