@@ -1831,3 +1831,114 @@ class TestCheckQKV:
         for i in range(1, 8):
             level = mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 10.0, step=i)
         assert level == AlertLevel.INFO
+
+
+# -- Attention/QKV correlation rules (Phase 15 Plan 01) -----------------------
+
+
+class TestAttentionCorrelationRules:
+    """Tests for attention and QKV correlation rules in correlation_check()."""
+
+    def test_attention_collapse_convergence_slow_warn(self) -> None:
+        """Falling attention entropy + low convergence score triggers WARN."""
+        mon = TrendMonitor(window_size=30)
+        # Feed increasing loss to get low convergence score
+        for i in range(250):
+            mon.check_convergence(0.5 + i * 0.05, step=i)
+        mon.convergence_score(current_loss=13.0)
+
+        # Feed falling entropy data via check_attention
+        for i in range(10):
+            mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.3, step=i)
+
+        # Provide metrics dict with the unsuffixed entropy key
+        metrics = {"attention/layer_0/entropy": 2.0}
+        alerts = mon.correlation_check(metrics)
+
+        collapse_alerts = [a for a in alerts if a[0] == "attention_collapse_convergence_slow"]
+        assert len(collapse_alerts) == 1
+        assert collapse_alerts[0][1] == AlertLevel.WARN
+        assert "attention" in collapse_alerts[0][2].lower()
+
+    def test_qkv_condition_high_gradient_anomaly_warn(self) -> None:
+        """High QKV condition number + gradient anomaly triggers WARN."""
+        mon = TrendMonitor(window_size=30)
+
+        # Feed rising QKV condition number data (latest > 1000)
+        for i in range(10):
+            mon.check_qkv("layer_0", condition_number=1000.0 + float(i) * 100.0, step=i)
+
+        # Feed gradient data with significant slope
+        for i in range(10):
+            mon.check("gradient_norm", value=float(i) * 0.5, threshold=9999.0)
+
+        metrics = {
+            "qkv/layer_0/cond": 2000.0,
+            "gradient_norm": 4.5,
+        }
+        alerts = mon.correlation_check(metrics)
+
+        qkv_alerts = [a for a in alerts if a[0] == "qkv_condition_high_gradient_anomaly"]
+        assert len(qkv_alerts) == 1
+        assert qkv_alerts[0][1] == AlertLevel.WARN
+        assert "condition" in qkv_alerts[0][2].lower()
+
+    def test_no_attention_collapse_when_converging(self) -> None:
+        """No attention_collapse alert when convergence score is high."""
+        mon = TrendMonitor(window_size=30)
+        # Feed decreasing loss to get high convergence score
+        for i in range(250):
+            mon.check_convergence(5.0 - i * 0.01, step=i)
+        mon.convergence_score(current_loss=2.5)
+
+        # Feed falling entropy data
+        for i in range(10):
+            mon.check_attention("layer_0", entropy=5.0 - float(i) * 0.3, step=i)
+
+        metrics = {"attention/layer_0/entropy": 2.0}
+        alerts = mon.correlation_check(metrics)
+
+        collapse_alerts = [a for a in alerts if a[0] == "attention_collapse_convergence_slow"]
+        assert len(collapse_alerts) == 0
+
+    def test_no_qkv_alert_when_condition_normal(self) -> None:
+        """No qkv_condition_high alert when condition number is normal."""
+        mon = TrendMonitor(window_size=30)
+
+        # Feed normal condition number (below 1000 threshold)
+        for i in range(10):
+            mon.check_qkv("layer_0", condition_number=100.0 + float(i) * 10.0, step=i)
+
+        # Feed gradient data with significant slope
+        for i in range(10):
+            mon.check("gradient_norm", value=float(i) * 0.5, threshold=9999.0)
+
+        metrics = {
+            "qkv/layer_0/cond": 200.0,
+            "gradient_norm": 4.5,
+        }
+        alerts = mon.correlation_check(metrics)
+
+        qkv_alerts = [a for a in alerts if a[0] == "qkv_condition_high_gradient_anomaly"]
+        assert len(qkv_alerts) == 0
+
+    def test_no_qkv_alert_when_gradient_stable(self) -> None:
+        """No qkv_condition_high alert when gradient norm has no significant slope."""
+        mon = TrendMonitor(window_size=30)
+
+        # Feed rising QKV condition number (above 1000)
+        for i in range(10):
+            mon.check_qkv("layer_0", condition_number=1000.0 + float(i) * 100.0, step=i)
+
+        # Feed stable gradient data (no significant slope)
+        for i in range(10):
+            mon.check("gradient_norm", value=1.0, threshold=9999.0)
+
+        metrics = {
+            "qkv/layer_0/cond": 2000.0,
+            "gradient_norm": 1.0,
+        }
+        alerts = mon.correlation_check(metrics)
+
+        qkv_alerts = [a for a in alerts if a[0] == "qkv_condition_high_gradient_anomaly"]
+        assert len(qkv_alerts) == 0
