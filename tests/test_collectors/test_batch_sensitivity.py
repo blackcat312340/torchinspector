@@ -26,7 +26,7 @@ def mock_backend() -> MagicMock:
 @pytest.fixture
 def mock_monitor() -> MagicMock:
     """Mocked TrendMonitor."""
-    m = MagicMock(spec=TrendMonitor)
+    m = MagicMock()
     m.check_bsz.return_value = AlertLevel.OK
     return m
 

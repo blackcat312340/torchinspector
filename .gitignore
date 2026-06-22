@@ -67,3 +67,5 @@ demo.py
 weight_debug.png
 tmp
 tmp
+
+.pytest_*
